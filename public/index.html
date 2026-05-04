@@ -459,14 +459,14 @@
                     const status = await response.json();
 
                     if (status.name === 'Zion') {
-                        this.statusBar.textContent = \`Connected to \${status.name} • Ready to chat\`;
+                        this.statusBar.textContent = `Connected to ${status.name} • Ready to chat`;
                         this.enableChat();
 
                         // Check customization status
                         if (status.customizationStatus && status.customizationStatus.status === 'needs_customization') {
-                            this.addSystemMessage(\`Hi \${status.humanName}! I see you have \${status.customizationStatus.remainingTodos} sections left to customize in my memory-seed.md file. Feel free to chat with me now, and customize me later!\`);
+                            this.addSystemMessage(`Hi ${status.humanName}! I see you have ${status.customizationStatus.remainingTodos} sections left to customize in my memory-seed.md file. Feel free to chat with me now, and customize me later!`);
                         } else if (status.customizationStatus && status.customizationStatus.status === 'fully_customized') {
-                            this.addSystemMessage(\`Hello \${status.humanName}! I'm fully customized and ready for deep conversations!\`);
+                            this.addSystemMessage(`Hello ${status.humanName}! I'm fully customized and ready for deep conversations!`);
                         }
                     }
                 } catch (error) {
@@ -636,7 +636,7 @@
                         this.playAudioResponse(result.audio.data);
                     }
 
-                    this.showVoiceStatus(\`✓ Text & voice response ready\`, 'success');
+                    this.showVoiceStatus(`✓ Text & voice response ready`, 'success');
                     setTimeout(() => this.hideVoiceStatus(), 2000);
 
                 } catch (error) {
@@ -776,7 +776,7 @@
 
             addMessage(content, sender) {
                 const messageDiv = document.createElement('div');
-                messageDiv.className = \`message \${sender}\`;
+                messageDiv.className = `message ${sender}`;
                 messageDiv.textContent = content;
 
                 // Remove welcome message if it exists

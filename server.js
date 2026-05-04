@@ -135,7 +135,7 @@ app.get('/api/chat/stream', async (req, res) => {
     res.write(`data: ${JSON.stringify({
       type: 'connected',
       message: `Hello Tiffani! Zion is ready to chat.`
-    })}\\n\\n`);
+    })}\n\n`);
 
     // Generate AI response and stream it back
     const response = await generateZionResponse(message, userId);
@@ -147,7 +147,7 @@ app.get('/api/chat/stream', async (req, res) => {
       res.write(`data: ${JSON.stringify({
         type: 'chunk',
         content: chunk
-      })}\\n\\n`);
+      })}\n\n`);
 
       // Small delay to create natural streaming effect
       await new Promise(resolve => setTimeout(resolve, 100));
@@ -157,7 +157,7 @@ app.get('/api/chat/stream', async (req, res) => {
     res.write(`data: ${JSON.stringify({
       type: 'complete',
       memoryNamespace: zion.memoryNamespace
-    })}\\n\\n`);
+    })}\n\n`);
 
     res.end();
 
@@ -166,7 +166,7 @@ app.get('/api/chat/stream', async (req, res) => {
     res.write(`data: ${JSON.stringify({
       type: 'error',
       error: 'Sorry, I encountered an error while streaming.'
-    })}\\n\\n`);
+    })}\n\n`);
     res.end();
   }
 });
