@@ -406,11 +406,11 @@
 
             setupEventListeners() {
                 // Text chat
-                this.sendButton.addEventListener('click', () => this.sendMessage());
+                this.sendButton.addEventListener('click', () => this.sendMessage(this.voiceOutputEnabled));
                 this.messageInput.addEventListener('keypress', (e) => {
                     if (e.key === 'Enter' && !e.shiftKey) {
                         e.preventDefault();
-                        this.sendMessage();
+                        this.sendMessage(this.voiceOutputEnabled);
                     }
                 });
 
