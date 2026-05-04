@@ -4,6 +4,21 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Zion - Your Personal AI Assistant</title>
+
+    <!-- PWA Meta Tags -->
+    <meta name="description" content="Zion - Personal AI companion created for Tiffani. Truth · Safety · We Got Your Back">
+    <meta name="theme-color" content="#667eea">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <meta name="apple-mobile-web-app-title" content="Zion">
+    <meta name="msapplication-TileColor" content="#667eea">
+
+    <!-- PWA Manifest -->
+    <link rel="manifest" href="/manifest.json">
+
+    <!-- PWA Icons -->
+    <link rel="icon" type="image/svg+xml" href="/icons/icon.svg">
+    <link rel="apple-touch-icon" href="/icons/icon-192.png">
     <style>
         * {
             margin: 0;
@@ -824,6 +839,53 @@
         // Initialize the chat when page loads
         document.addEventListener('DOMContentLoaded', () => {
             new ZionChat();
+        });
+    </script>
+
+    <!-- PWA Service Worker Registration -->
+    <script>
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('/sw.js')
+                    .then((registration) => {
+                        console.log('[Zion PWA] Service Worker registered successfully:', registration.scope);
+
+                        // Check for updates
+                        registration.addEventListener('updatefound', () => {
+                            const newWorker = registration.installing;
+                            console.log('[Zion PWA] New service worker installing...');
+
+                            newWorker.addEventListener('statechange', () => {
+                                if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+                                    console.log('[Zion PWA] New content available - refresh to update');
+                                    // Could show a notification to user here
+                                }
+                            });
+                        });
+                    })
+                    .catch((error) => {
+                        console.log('[Zion PWA] Service Worker registration failed:', error);
+                    });
+            });
+        }
+
+        // PWA Install Prompt
+        let deferredPrompt;
+        let installButton = null;
+
+        window.addEventListener('beforeinstallprompt', (e) => {
+            console.log('[Zion PWA] Install prompt available');
+            e.preventDefault();
+            deferredPrompt = e;
+
+            // Show install button if desired
+            // For now, just log that install is available
+            console.log('[Zion PWA] App can be installed');
+        });
+
+        window.addEventListener('appinstalled', (evt) => {
+            console.log('[Zion PWA] App installed successfully');
+            deferredPrompt = null;
         });
     </script>
 </body>
