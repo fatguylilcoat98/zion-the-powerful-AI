@@ -627,8 +627,12 @@
                         return;
                     }
 
-                    // Display transcribed text and AI response simultaneously
-                    this.addMessage(result.transcript, 'user');
+                    // Put transcript in message box for user to see/edit
+                    this.messageInput.value = result.transcript;
+                    this.messageInput.disabled = false;
+                    this.sendButton.disabled = false;
+
+                    // Add AI response to chat
                     this.addMessage(result.response, 'zion');
 
                     // Play audio response if available and voice is enabled
@@ -636,8 +640,12 @@
                         this.playAudioResponse(result.audio.data);
                     }
 
-                    this.showVoiceStatus(`✓ Text & voice response ready`, 'success');
-                    setTimeout(() => this.hideVoiceStatus(), 2000);
+                    // Reset voice UI and focus on input
+                    this.resetVoiceUI();
+                    this.messageInput.focus();
+
+                    this.showVoiceStatus(`✓ Transcript ready - edit if needed, then send`, 'success');
+                    setTimeout(() => this.hideVoiceStatus(), 3000);
 
                 } catch (error) {
                     console.error('Voice processing failed:', error);
