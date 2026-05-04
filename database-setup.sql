@@ -11,10 +11,13 @@ ALTER DATABASE postgres SET "app.current_user_id" = '';
 -- Chat history storage
 CREATE TABLE IF NOT EXISTS zion_tiffani_conversations (
     id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
-    session_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    session_id TEXT,
     user_message TEXT NOT NULL,
     ai_response TEXT NOT NULL,
     message_type TEXT DEFAULT 'text' CHECK (message_type IN ('text', 'voice')),
+    emotional_tone TEXT,
+    importance_score INTEGER DEFAULT 5 CHECK (importance_score BETWEEN 1 AND 10),
     timestamp TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     context JSONB DEFAULT '{}',
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
@@ -66,6 +69,7 @@ CREATE TABLE IF NOT EXISTS zion_tiffani_personality_evolution (
 );
 
 -- Create indexes for performance
+CREATE INDEX IF NOT EXISTS idx_conversations_user ON zion_tiffani_conversations(user_id);
 CREATE INDEX IF NOT EXISTS idx_conversations_session ON zion_tiffani_conversations(session_id);
 CREATE INDEX IF NOT EXISTS idx_conversations_timestamp ON zion_tiffani_conversations(timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_memories_type ON zion_tiffani_memories(memory_type);
