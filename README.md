@@ -7,6 +7,16 @@
 
 **Zion** is a personal AI assistant created specifically for **Tiffani**. Unlike generic AI chatbots, Zion is designed to understand Tiffani's unique personality, preferences, and communication style to provide truly personalized assistance and companionship.
 
+### ✨ **NEW: Full AI Integration**
+
+Zion now has **real AI intelligence** powered by Claude and complete memory storage:
+
+- **🧠 Real AI Responses:** Powered by Claude Sonnet for intelligent, contextual conversations
+- **💾 Persistent Memory:** Remembers everything about Tiffani across all conversations
+- **📊 Learning System:** Gets better at understanding Tiffani over time
+- **🔒 Private Database:** All memories stored in isolated Supabase tables
+- **⚡ Streaming Responses:** Real-time response generation for natural conversations
+
 ## 🎯 What Makes Zion Special
 
 - **Personalized Identity:** Zion has a unique personality designed around being creative, intuitive, and empathetic
@@ -21,17 +31,37 @@
 npm install
 ```
 
-### 2. Test Configuration
+### 2. Set Up Environment
+```bash
+cp .env.example .env
+# Edit .env with your API keys:
+# - SUPABASE_URL=your_supabase_project_url
+# - SUPABASE_SERVICE_KEY=your_service_key
+# - ANTHROPIC_API_KEY=your_anthropic_api_key
+```
+
+### 3. Set Up Database
+```bash
+npm run setup-db
+```
+
+If automatic setup fails, run manual setup:
+```bash
+npm run setup-db-manual
+# Copy the SQL output to your Supabase SQL Editor
+```
+
+### 4. Test Configuration
 ```bash
 npm test
 ```
 
-### 3. Start Zion
+### 5. Start Zion
 ```bash
 npm start
 ```
 
-### 4. Open Chat Interface
+### 6. Open Chat Interface
 Visit `http://localhost:3000` to start chatting with Zion!
 
 ## 🎨 Customization for Tiffani

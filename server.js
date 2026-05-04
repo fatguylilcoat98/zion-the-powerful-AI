@@ -13,7 +13,7 @@ const helmet = require('helmet');
 const path = require('path');
 require('dotenv').config();
 
-const { getZionInstance } = require('./lib/zion-manager');
+const { getZionInstance, generateZionResponse } = require('./lib/zion-manager');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -68,19 +68,8 @@ app.post('/api/chat', async (req, res) => {
     // Load Zion's configuration and identity
     const zion = await getZionInstance();
 
-    // TODO: Implement actual AI response generation
-    // For now, return a personalized response showing Zion is working
-    const response = `Hi Tiffani! I'm Zion, your personal AI assistant. I received your message: "${message}"
-
-I'm configured with these personality traits: ${zion.config.personality.primaryTraits.join(', ')}.
-
-My communication style is: ${zion.config.personality.communicationStyle}.
-
-I'm still being set up by Chris, but I'm excited to get to know you better once you fill out the memory-seed.md file!
-
-(This is a placeholder response - full AI functionality will be implemented next)`;
-
-    // TODO: Store conversation in database with proper namespace isolation
+    // Generate AI response using Claude with memory integration
+    const response = await generateZionResponse(message, userId);
 
     res.json({
       response,
@@ -129,11 +118,11 @@ app.get('/api/chat/stream', async (req, res) => {
       message: `Hello Tiffani! Zion is ready to chat.`
     })}\\n\\n`);
 
-    // TODO: Implement streaming AI response
-    // For now, simulate streaming response
-    const placeholderResponse = `Hi Tiffani! I'm streaming a response to: "${message}". This shows the streaming system is working perfectly!`;
+    // Generate AI response and stream it back
+    const response = await generateZionResponse(message, userId);
 
-    const words = placeholderResponse.split(' ');
+    // Stream the response word by word for better UX
+    const words = response.split(' ');
     for (let i = 0; i < words.length; i++) {
       const chunk = words[i] + ' ';
       res.write(`data: ${JSON.stringify({
@@ -141,8 +130,8 @@ app.get('/api/chat/stream', async (req, res) => {
         content: chunk
       })}\\n\\n`);
 
-      // Small delay to simulate real streaming
-      await new Promise(resolve => setTimeout(resolve, 150));
+      // Small delay to create natural streaming effect
+      await new Promise(resolve => setTimeout(resolve, 100));
     }
 
     // Send completion signal
