@@ -185,6 +185,22 @@
             color: #6c757d;
             margin-top: 5px;
             text-align: center;
+            transition: all 0.3s ease;
+        }
+
+        .voice-status.processing {
+            color: #667eea;
+            font-weight: 500;
+        }
+
+        .voice-status.success {
+            color: #28a745;
+            font-weight: 500;
+        }
+
+        .voice-status.error {
+            color: #dc3545;
+            font-weight: 500;
         }
 
         .audio-player {
@@ -412,11 +428,11 @@
 
                     this.voiceButton.classList.add('recording');
                     this.voiceButton.textContent = '🔴';
-                    this.showVoiceStatus('Recording... (release to send)');
+                    this.showVoiceStatus('🎙️ Recording... (release to send)', 'processing');
 
                 } catch (error) {
                     console.error('Failed to start recording:', error);
-                    this.showVoiceStatus('Microphone access denied');
+                    this.showVoiceStatus('❌ Microphone access denied', 'error');
                     setTimeout(() => this.hideVoiceStatus(), 3000);
                 }
             }
@@ -433,7 +449,7 @@
                 this.voiceButton.classList.remove('recording');
                 this.voiceButton.classList.add('processing');
                 this.voiceButton.textContent = '⏳';
-                this.showVoiceStatus('Processing...');
+                this.showVoiceStatus('⚡ Preparing parallel processing...', 'processing');
             }
 
             async processRecording() {
@@ -444,48 +460,64 @@
                 }
 
                 this.isProcessing = true;
+                this.showVoiceStatus('🔄 Processing speech & generating response...', 'processing');
 
                 try {
                     // Create audio blob
                     const audioBlob = new Blob(this.audioChunks, { type: 'audio/webm' });
 
-                    // Send to transcription endpoint
+                    // Send to parallel voice-chat endpoint for simultaneous processing
                     const formData = new FormData();
                     formData.append('audio', audioBlob, 'recording.webm');
 
-                    const transcribeResponse = await fetch('/api/zion/transcribe', {
+                    this.showTypingIndicator();
+                    this.messageInput.disabled = true;
+                    this.sendButton.disabled = true;
+
+                    const voiceChatResponse = await fetch('/api/zion/voice-chat', {
                         method: 'POST',
                         body: formData
                     });
 
-                    if (!transcribeResponse.ok) {
-                        throw new Error('Transcription failed');
+                    if (!voiceChatResponse.ok) {
+                        throw new Error('Voice processing failed');
                     }
 
-                    const transcribeResult = await transcribeResponse.json();
-                    const transcript = transcribeResult.transcript;
+                    const result = await voiceChatResponse.json();
 
-                    if (!transcript || transcript.trim().length === 0) {
-                        this.showVoiceStatus('No speech detected');
+                    if (!result.transcript || result.transcript.trim().length === 0) {
+                        this.showVoiceStatus('No speech detected', 'error');
                         setTimeout(() => this.hideVoiceStatus(), 3000);
                         this.resetVoiceButton();
+                        this.hideTypingIndicator();
+                        this.messageInput.disabled = false;
+                        this.sendButton.disabled = false;
                         return;
                     }
 
-                    // Show transcribed text in input
-                    this.messageInput.value = transcript;
-                    this.showVoiceStatus(\`Heard: "\${transcript}"\`);
+                    // Display transcribed text and AI response simultaneously
+                    this.addMessage(result.transcript, 'user');
+                    this.addMessage(result.response, 'zion');
 
-                    // Send the message and request speech response
-                    await this.sendMessage(true);
+                    // Play audio response if available
+                    if (result.audio && result.audio.data) {
+                        this.playAudioResponse(result.audio.data);
+                    }
+
+                    this.showVoiceStatus(\`✓ Text & voice response ready\`, 'success');
+                    setTimeout(() => this.hideVoiceStatus(), 2000);
 
                 } catch (error) {
                     console.error('Voice processing failed:', error);
-                    this.showVoiceStatus('Voice processing failed');
+                    this.showVoiceStatus('Voice processing failed', 'error');
                     setTimeout(() => this.hideVoiceStatus(), 3000);
                 } finally {
                     this.isProcessing = false;
                     this.resetVoiceButton();
+                    this.hideTypingIndicator();
+                    this.messageInput.disabled = false;
+                    this.sendButton.disabled = false;
+                    this.messageInput.focus();
                 }
             }
 
@@ -495,13 +527,26 @@
                 this.voiceButton.disabled = !this.voiceEnabled;
             }
 
-            showVoiceStatus(message) {
+            showVoiceStatus(message, type = 'default') {
                 this.voiceStatus.textContent = message;
                 this.voiceStatus.style.display = 'block';
+
+                // Reset classes
+                this.voiceStatus.classList.remove('processing', 'success', 'error');
+
+                // Add appropriate class
+                if (type === 'processing') {
+                    this.voiceStatus.classList.add('processing');
+                } else if (type === 'success') {
+                    this.voiceStatus.classList.add('success');
+                } else if (type === 'error') {
+                    this.voiceStatus.classList.add('error');
+                }
             }
 
             hideVoiceStatus() {
                 this.voiceStatus.style.display = 'none';
+                this.voiceStatus.classList.remove('processing', 'success', 'error');
             }
 
             async sendMessage(generateSpeech = false) {

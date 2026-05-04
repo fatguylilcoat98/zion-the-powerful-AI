@@ -210,6 +210,98 @@ app.post('/api/zion/transcribe', audioUpload.single('audio'), async (req, res) =
 });
 
 /**
+ * Process audio with parallel transcription and AI response
+ * POST /api/zion/voice-chat
+ */
+app.post('/api/zion/voice-chat', audioUpload.single('audio'), async (req, res) => {
+  try {
+    const { userId = 'tiffani' } = req.body;
+
+    if (!req.file) {
+      return res.status(400).json({ error: 'Audio file is required' });
+    }
+
+    console.log(`[ZION VOICE] Processing voice chat: ${req.file.originalname} (${req.file.size} bytes)`);
+
+    // Validate audio format
+    validateAudioFormat(req.file.originalname, req.file.buffer);
+
+    // Run transcription and AI processing in parallel
+    const [transcriptionResult, aiResponseResult] = await Promise.allSettled([
+      // Transcribe audio to text
+      transcribeAudio(req.file.buffer, req.file.originalname),
+
+      // Process audio directly for AI response with voice output
+      (async () => {
+        // First transcribe for AI processing
+        const transcript = await transcribeAudio(req.file.buffer, req.file.originalname);
+
+        // Generate AI response
+        const aiResponse = await generateZionResponse(transcript, userId);
+
+        // Generate voice response in parallel
+        const voiceConfig = getVoiceConfig();
+        const audioBuffer = await textToSpeech(aiResponse, voiceConfig);
+
+        return {
+          transcript,
+          aiResponse,
+          audioBuffer
+        };
+      })()
+    ]);
+
+    // Handle transcription result
+    let transcript = '';
+    if (transcriptionResult.status === 'fulfilled') {
+      transcript = transcriptionResult.value;
+    } else {
+      console.error('[ZION VOICE] Transcription failed:', transcriptionResult.reason);
+    }
+
+    // Handle AI response result
+    let aiResponse = '';
+    let audioData = null;
+    if (aiResponseResult.status === 'fulfilled') {
+      const result = aiResponseResult.value;
+      transcript = result.transcript; // Use the transcript from AI processing
+      aiResponse = result.aiResponse;
+      audioData = result.audioBuffer.toString('base64');
+    } else {
+      console.error('[ZION VOICE] AI processing failed:', aiResponseResult.reason);
+      aiResponse = 'I had trouble processing your message. Could you try again?';
+    }
+
+    res.json({
+      transcript,
+      response: aiResponse,
+      audio: audioData ? {
+        data: audioData,
+        format: 'mp3',
+        voice: 'onyx'
+      } : null,
+      zion: {
+        name: 'Zion',
+        humanName: 'Tiffani',
+        memoryNamespace: 'zion_tiffani'
+      },
+      timestamp: new Date().toISOString(),
+      processingTime: {
+        parallel: true,
+        note: 'Transcription and AI response processed simultaneously'
+      }
+    });
+
+  } catch (error) {
+    console.error('[ZION VOICE] Voice chat error:', error.message);
+    res.status(500).json({
+      error: 'Failed to process voice message',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+/**
  * Chat endpoint specifically for Zion with voice integration
  * POST /api/zion/chat
  */
