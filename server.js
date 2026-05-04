@@ -11,9 +11,28 @@ const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const path = require('path');
+const multer = require('multer');
 require('dotenv').config();
 
 const { getZionInstance, generateZionResponse } = require('./lib/zion-manager');
+const { transcribeAudio, textToSpeech, getVoiceConfig, validateAudioFormat, isVoiceAvailable } = require('./lib/zion-voice');
+
+// Configure multer for audio uploads
+const audioUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 25 * 1024 * 1024, // 25MB limit
+    files: 1
+  },
+  fileFilter: (req, file, cb) => {
+    const supportedTypes = ['audio/mpeg', 'audio/mp4', 'audio/wav', 'audio/webm', 'audio/m4a'];
+    if (supportedTypes.includes(file.mimetype) || file.originalname.match(/\.(mp3|mp4|wav|webm|m4a)$/i)) {
+      cb(null, true);
+    } else {
+      cb(new Error('Unsupported audio format'), false);
+    }
+  }
+});
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -149,6 +168,161 @@ app.get('/api/chat/stream', async (req, res) => {
       error: 'Sorry, I encountered an error while streaming.'
     })}\\n\\n`);
     res.end();
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ZION VOICE ENDPOINTS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Transcribe audio to text
+ * POST /api/zion/transcribe
+ */
+app.post('/api/zion/transcribe', audioUpload.single('audio'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'Audio file is required' });
+    }
+
+    console.log(`[ZION VOICE] Received audio file: ${req.file.originalname} (${req.file.size} bytes)`);
+
+    // Validate audio format
+    validateAudioFormat(req.file.originalname, req.file.buffer);
+
+    // Transcribe audio
+    const transcript = await transcribeAudio(req.file.buffer, req.file.originalname);
+
+    res.json({
+      transcript,
+      filename: req.file.originalname,
+      size: req.file.size,
+      timestamp: new Date().toISOString()
+    });
+
+  } catch (error) {
+    console.error('[ZION VOICE] Transcription error:', error.message);
+    res.status(500).json({
+      error: 'Failed to transcribe audio',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+/**
+ * Chat endpoint specifically for Zion with voice integration
+ * POST /api/zion/chat
+ */
+app.post('/api/zion/chat', async (req, res) => {
+  try {
+    const { message, userId = 'tiffani', generateSpeech = false } = req.body;
+
+    if (!message) {
+      return res.status(400).json({ error: 'Message is required' });
+    }
+
+    console.log(`[ZION] Processing message from ${userId}: "${message.substring(0, 50)}..."`);
+
+    // Generate AI response using Claude with memory integration
+    const response = await generateZionResponse(message, userId);
+
+    const result = {
+      response,
+      zion: {
+        name: 'Zion',
+        humanName: 'Tiffani',
+        memoryNamespace: 'zion_tiffani'
+      },
+      timestamp: new Date().toISOString()
+    };
+
+    // Generate speech if requested
+    if (generateSpeech) {
+      try {
+        const voiceConfig = getVoiceConfig();
+        const audioBuffer = await textToSpeech(response, voiceConfig);
+
+        // Convert to base64 for JSON response
+        result.audio = {
+          data: audioBuffer.toString('base64'),
+          format: 'mp3',
+          voice: voiceConfig.voice
+        };
+      } catch (speechError) {
+        console.error('[ZION VOICE] Speech generation failed:', speechError.message);
+        result.speechError = 'Failed to generate speech';
+      }
+    }
+
+    res.json(result);
+
+  } catch (error) {
+    console.error('[ZION] Chat error:', error.message);
+    res.status(500).json({
+      error: 'Sorry, I encountered an error. Please try again.',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+/**
+ * Generate speech from text
+ * POST /api/zion/speak
+ */
+app.post('/api/zion/speak', async (req, res) => {
+  try {
+    const { text, voice = 'onyx', speed = 1.0 } = req.body;
+
+    if (!text) {
+      return res.status(400).json({ error: 'Text is required' });
+    }
+
+    console.log(`[ZION VOICE] Generating speech: "${text.substring(0, 50)}..."`);
+
+    const voiceConfig = { voice, speed };
+    const audioBuffer = await textToSpeech(text, voiceConfig);
+
+    // Set appropriate headers for audio response
+    res.set({
+      'Content-Type': 'audio/mpeg',
+      'Content-Length': audioBuffer.length,
+      'Content-Disposition': 'inline; filename="zion-response.mp3"'
+    });
+
+    res.send(audioBuffer);
+
+  } catch (error) {
+    console.error('[ZION VOICE] Speech generation error:', error.message);
+    res.status(500).json({
+      error: 'Failed to generate speech',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+/**
+ * Get voice capabilities status
+ * GET /api/zion/voice-status
+ */
+app.get('/api/zion/voice-status', (req, res) => {
+  try {
+    const voiceStatus = isVoiceAvailable();
+    const voiceConfig = getVoiceConfig();
+
+    res.json({
+      available: voiceStatus.configured,
+      speechToText: voiceStatus.speechToText,
+      textToSpeech: voiceStatus.textToSpeech,
+      voiceConfig: voiceConfig,
+      supportedFormats: ['mp3', 'mp4', 'wav', 'webm', 'm4a']
+    });
+
+  } catch (error) {
+    console.error('[ZION VOICE] Voice status error:', error.message);
+    res.status(500).json({
+      error: 'Failed to get voice status',
+      available: false
+    });
   }
 });
 

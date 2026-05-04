@@ -101,6 +101,8 @@
             padding: 20px;
             background: #f8f9fa;
             border-top: 1px solid #e9ecef;
+            align-items: center;
+            gap: 10px;
         }
 
         .chat-input input {
@@ -110,12 +112,52 @@
             border-radius: 25px;
             font-size: 1em;
             outline: none;
-            margin-right: 10px;
         }
 
         .chat-input input:focus {
             border-color: #667eea;
             box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+
+        .voice-button {
+            width: 50px;
+            height: 50px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.2em;
+            transition: all 0.3s ease;
+            box-shadow: 0 2px 10px rgba(102, 126, 234, 0.3);
+        }
+
+        .voice-button:hover:not(:disabled) {
+            transform: scale(1.05);
+            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        .voice-button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        .voice-button.recording {
+            background: linear-gradient(135deg, #dc3545 0%, #c82333 100%);
+            animation: pulse 1.5s infinite;
+        }
+
+        .voice-button.processing {
+            background: linear-gradient(135deg, #ffc107 0%, #e0a800 100%);
+        }
+
+        @keyframes pulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.1); }
+            100% { transform: scale(1); }
         }
 
         .chat-input button {
@@ -136,6 +178,19 @@
         .chat-input button:disabled {
             opacity: 0.6;
             cursor: not-allowed;
+        }
+
+        .voice-status {
+            font-size: 0.8em;
+            color: #6c757d;
+            margin-top: 5px;
+            text-align: center;
+        }
+
+        .audio-player {
+            display: none;
+            margin: 10px 0;
+            width: 100%;
         }
 
         .typing-indicator {
@@ -216,9 +271,15 @@
         </div>
 
         <div class="chat-input">
+            <button id="voiceButton" class="voice-button" title="Hold to record voice message" disabled>
+                🎤
+            </button>
             <input type="text" id="messageInput" placeholder="Type your message to Zion..." disabled>
             <button id="sendButton" disabled>Send</button>
         </div>
+
+        <div class="voice-status" id="voiceStatus" style="display: none;"></div>
+        <audio id="audioPlayer" class="audio-player" controls></audio>
     </div>
 
     <script>
@@ -226,9 +287,19 @@
             constructor() {
                 this.messageInput = document.getElementById('messageInput');
                 this.sendButton = document.getElementById('sendButton');
+                this.voiceButton = document.getElementById('voiceButton');
                 this.chatMessages = document.getElementById('chatMessages');
                 this.statusBar = document.getElementById('statusText');
                 this.typingIndicator = document.getElementById('typingIndicator');
+                this.voiceStatus = document.getElementById('voiceStatus');
+                this.audioPlayer = document.getElementById('audioPlayer');
+
+                // Voice recording state
+                this.mediaRecorder = null;
+                this.audioChunks = [];
+                this.isRecording = false;
+                this.isProcessing = false;
+                this.voiceEnabled = false;
 
                 this.init();
             }
@@ -236,15 +307,30 @@
             async init() {
                 this.setupEventListeners();
                 await this.checkZionStatus();
+                await this.checkVoiceCapabilities();
             }
 
             setupEventListeners() {
+                // Text chat
                 this.sendButton.addEventListener('click', () => this.sendMessage());
                 this.messageInput.addEventListener('keypress', (e) => {
                     if (e.key === 'Enter' && !e.shiftKey) {
                         e.preventDefault();
                         this.sendMessage();
                     }
+                });
+
+                // Voice recording
+                this.voiceButton.addEventListener('mousedown', () => this.startRecording());
+                this.voiceButton.addEventListener('mouseup', () => this.stopRecording());
+                this.voiceButton.addEventListener('mouseleave', () => this.stopRecording());
+                this.voiceButton.addEventListener('touchstart', (e) => {
+                    e.preventDefault();
+                    this.startRecording();
+                });
+                this.voiceButton.addEventListener('touchend', (e) => {
+                    e.preventDefault();
+                    this.stopRecording();
                 });
             }
 
@@ -270,13 +356,155 @@
                 }
             }
 
+            async checkVoiceCapabilities() {
+                try {
+                    const response = await fetch('/api/zion/voice-status');
+                    const voiceStatus = await response.json();
+
+                    this.voiceEnabled = voiceStatus.available;
+
+                    if (this.voiceEnabled) {
+                        this.voiceButton.disabled = false;
+                        this.voiceButton.title = 'Hold to record voice message';
+                        console.log('Voice capabilities enabled');
+                    } else {
+                        this.voiceButton.disabled = true;
+                        this.voiceButton.title = 'Voice not available (OpenAI API key required)';
+                        console.warn('Voice capabilities disabled - OpenAI API key not configured');
+                    }
+                } catch (error) {
+                    console.error('Voice status check failed:', error);
+                    this.voiceButton.disabled = true;
+                    this.voiceButton.title = 'Voice not available';
+                }
+            }
+
             enableChat() {
                 this.messageInput.disabled = false;
                 this.sendButton.disabled = false;
                 this.messageInput.focus();
             }
 
-            async sendMessage() {
+            async startRecording() {
+                if (!this.voiceEnabled || this.isRecording || this.isProcessing) return;
+
+                try {
+                    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+                    this.mediaRecorder = new MediaRecorder(stream, {
+                        mimeType: 'audio/webm;codecs=opus'
+                    });
+
+                    this.audioChunks = [];
+                    this.isRecording = true;
+
+                    this.mediaRecorder.ondataavailable = (event) => {
+                        if (event.data.size > 0) {
+                            this.audioChunks.push(event.data);
+                        }
+                    };
+
+                    this.mediaRecorder.onstop = () => {
+                        this.processRecording();
+                    };
+
+                    this.mediaRecorder.start();
+
+                    this.voiceButton.classList.add('recording');
+                    this.voiceButton.textContent = '🔴';
+                    this.showVoiceStatus('Recording... (release to send)');
+
+                } catch (error) {
+                    console.error('Failed to start recording:', error);
+                    this.showVoiceStatus('Microphone access denied');
+                    setTimeout(() => this.hideVoiceStatus(), 3000);
+                }
+            }
+
+            stopRecording() {
+                if (!this.isRecording || !this.mediaRecorder) return;
+
+                this.isRecording = false;
+                this.mediaRecorder.stop();
+
+                // Stop all tracks to release microphone
+                this.mediaRecorder.stream.getTracks().forEach(track => track.stop());
+
+                this.voiceButton.classList.remove('recording');
+                this.voiceButton.classList.add('processing');
+                this.voiceButton.textContent = '⏳';
+                this.showVoiceStatus('Processing...');
+            }
+
+            async processRecording() {
+                if (this.audioChunks.length === 0) {
+                    this.resetVoiceButton();
+                    this.hideVoiceStatus();
+                    return;
+                }
+
+                this.isProcessing = true;
+
+                try {
+                    // Create audio blob
+                    const audioBlob = new Blob(this.audioChunks, { type: 'audio/webm' });
+
+                    // Send to transcription endpoint
+                    const formData = new FormData();
+                    formData.append('audio', audioBlob, 'recording.webm');
+
+                    const transcribeResponse = await fetch('/api/zion/transcribe', {
+                        method: 'POST',
+                        body: formData
+                    });
+
+                    if (!transcribeResponse.ok) {
+                        throw new Error('Transcription failed');
+                    }
+
+                    const transcribeResult = await transcribeResponse.json();
+                    const transcript = transcribeResult.transcript;
+
+                    if (!transcript || transcript.trim().length === 0) {
+                        this.showVoiceStatus('No speech detected');
+                        setTimeout(() => this.hideVoiceStatus(), 3000);
+                        this.resetVoiceButton();
+                        return;
+                    }
+
+                    // Show transcribed text in input
+                    this.messageInput.value = transcript;
+                    this.showVoiceStatus(\`Heard: "\${transcript}"\`);
+
+                    // Send the message and request speech response
+                    await this.sendMessage(true);
+
+                } catch (error) {
+                    console.error('Voice processing failed:', error);
+                    this.showVoiceStatus('Voice processing failed');
+                    setTimeout(() => this.hideVoiceStatus(), 3000);
+                } finally {
+                    this.isProcessing = false;
+                    this.resetVoiceButton();
+                }
+            }
+
+            resetVoiceButton() {
+                this.voiceButton.classList.remove('recording', 'processing');
+                this.voiceButton.textContent = '🎤';
+                this.voiceButton.disabled = !this.voiceEnabled;
+            }
+
+            showVoiceStatus(message) {
+                this.voiceStatus.textContent = message;
+                this.voiceStatus.style.display = 'block';
+            }
+
+            hideVoiceStatus() {
+                this.voiceStatus.style.display = 'none';
+            }
+
+            async sendMessage(generateSpeech = false) {
                 const message = this.messageInput.value.trim();
                 if (!message) return;
 
@@ -284,21 +512,31 @@
                 this.messageInput.value = '';
                 this.messageInput.disabled = true;
                 this.sendButton.disabled = true;
+                this.voiceButton.disabled = true;
                 this.showTypingIndicator();
 
                 try {
-                    const response = await fetch('/api/chat', {
+                    // Use Zion-specific chat endpoint
+                    const response = await fetch('/api/zion/chat', {
                         method: 'POST',
                         headers: {
                             'Content-Type': 'application/json'
                         },
-                        body: JSON.stringify({ message })
+                        body: JSON.stringify({
+                            message,
+                            generateSpeech: generateSpeech && this.voiceEnabled
+                        })
                     });
 
                     const data = await response.json();
 
                     if (data.response) {
                         this.addMessage(data.response, 'zion');
+
+                        // Play audio response if available
+                        if (data.audio && data.audio.data) {
+                            this.playAudioResponse(data.audio.data);
+                        }
                     } else {
                         this.addSystemMessage('Sorry, I had trouble responding. Please try again.');
                     }
@@ -308,9 +546,39 @@
                     this.addSystemMessage('Connection error. Please check your connection and try again.');
                 } finally {
                     this.hideTypingIndicator();
+                    this.hideVoiceStatus();
                     this.messageInput.disabled = false;
                     this.sendButton.disabled = false;
+                    this.voiceButton.disabled = !this.voiceEnabled;
                     this.messageInput.focus();
+                }
+            }
+
+            playAudioResponse(base64Audio) {
+                try {
+                    // Convert base64 to blob
+                    const audioData = atob(base64Audio);
+                    const arrayBuffer = new ArrayBuffer(audioData.length);
+                    const view = new Uint8Array(arrayBuffer);
+
+                    for (let i = 0; i < audioData.length; i++) {
+                        view[i] = audioData.charCodeAt(i);
+                    }
+
+                    const audioBlob = new Blob([arrayBuffer], { type: 'audio/mpeg' });
+                    const audioUrl = URL.createObjectURL(audioBlob);
+
+                    this.audioPlayer.src = audioUrl;
+                    this.audioPlayer.style.display = 'block';
+                    this.audioPlayer.play();
+
+                    // Clean up URL after playback
+                    this.audioPlayer.addEventListener('ended', () => {
+                        URL.revokeObjectURL(audioUrl);
+                    }, { once: true });
+
+                } catch (error) {
+                    console.error('Failed to play audio response:', error);
                 }
             }
 
