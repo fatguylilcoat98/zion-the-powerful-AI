@@ -55,6 +55,67 @@
             border-bottom: 1px solid #e9ecef;
             font-size: 0.85em;
             color: #6c757d;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .voice-toggle-container {
+            display: flex;
+            align-items: center;
+        }
+
+        .voice-toggle {
+            position: relative;
+            display: flex;
+            align-items: center;
+            cursor: pointer;
+            font-size: 0.8em;
+        }
+
+        .voice-toggle input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+
+        .voice-toggle-slider {
+            position: relative;
+            width: 40px;
+            height: 20px;
+            background-color: #ccc;
+            border-radius: 20px;
+            transition: background-color 0.3s;
+            margin-right: 8px;
+        }
+
+        .voice-toggle-slider:before {
+            position: absolute;
+            content: "";
+            height: 16px;
+            width: 16px;
+            left: 2px;
+            bottom: 2px;
+            background-color: white;
+            border-radius: 50%;
+            transition: transform 0.3s;
+        }
+
+        .voice-toggle input:checked + .voice-toggle-slider {
+            background-color: #667eea;
+        }
+
+        .voice-toggle input:checked + .voice-toggle-slider:before {
+            transform: translateX(20px);
+        }
+
+        .voice-toggle-label {
+            color: #6c757d;
+            font-weight: 500;
+        }
+
+        .voice-toggle input:checked + .voice-toggle-slider + .voice-toggle-label {
+            color: #667eea;
         }
 
         .chat-messages {
@@ -275,6 +336,13 @@
 
         <div class="status-bar" id="statusBar">
             <span id="statusText">Connecting to Zion...</span>
+            <div class="voice-toggle-container">
+                <label class="voice-toggle">
+                    <input type="checkbox" id="voiceToggle" checked>
+                    <span class="voice-toggle-slider"></span>
+                    <span class="voice-toggle-label">🔊 Voice</span>
+                </label>
+            </div>
         </div>
 
         <div class="chat-messages" id="chatMessages">
@@ -316,6 +384,7 @@
                 this.typingIndicator = document.getElementById('typingIndicator');
                 this.voiceStatus = document.getElementById('voiceStatus');
                 this.audioPlayer = document.getElementById('audioPlayer');
+                this.voiceToggle = document.getElementById('voiceToggle');
 
                 // Voice recording state
                 this.mediaRecorder = null;
@@ -323,11 +392,13 @@
                 this.isRecording = false;
                 this.isProcessing = false;
                 this.voiceEnabled = false;
+                this.voiceOutputEnabled = true; // Controls whether Zion speaks back
 
                 this.init();
             }
 
             async init() {
+                this.loadVoicePreference();
                 this.setupEventListeners();
                 await this.checkZionStatus();
                 await this.checkVoiceCapabilities();
@@ -345,6 +416,41 @@
 
                 // Voice recording - click to start/stop
                 this.voiceButton.addEventListener('click', () => this.toggleRecording());
+
+                // Voice output toggle
+                this.voiceToggle.addEventListener('change', () => this.handleVoiceToggle());
+            }
+
+            loadVoicePreference() {
+                // Load voice output preference from localStorage
+                const savedPreference = localStorage.getItem('zionVoiceEnabled');
+                if (savedPreference !== null) {
+                    this.voiceOutputEnabled = savedPreference === 'true';
+                    this.voiceToggle.checked = this.voiceOutputEnabled;
+                }
+                this.updateVoiceToggleState();
+            }
+
+            handleVoiceToggle() {
+                this.voiceOutputEnabled = this.voiceToggle.checked;
+                localStorage.setItem('zionVoiceEnabled', this.voiceOutputEnabled.toString());
+                this.updateVoiceToggleState();
+
+                // Show feedback
+                const status = this.voiceOutputEnabled ? 'Voice responses enabled' : 'Voice responses disabled';
+                this.showVoiceStatus(`🔊 ${status}`, this.voiceOutputEnabled ? 'success' : 'default');
+                setTimeout(() => this.hideVoiceStatus(), 2000);
+            }
+
+            updateVoiceToggleState() {
+                const label = this.voiceToggle.parentElement.querySelector('.voice-toggle-label');
+                if (this.voiceOutputEnabled) {
+                    label.textContent = '🔊 Voice On';
+                    label.style.color = '#667eea';
+                } else {
+                    label.textContent = '🔇 Voice Off';
+                    label.style.color = '#6c757d';
+                }
             }
 
             async checkZionStatus() {
@@ -494,6 +600,7 @@
                     // Send to parallel voice-chat endpoint for simultaneous processing
                     const formData = new FormData();
                     formData.append('audio', audioBlob, 'recording.webm');
+                    formData.append('generateSpeech', this.voiceOutputEnabled.toString());
 
                     this.showTypingIndicator();
                     this.messageInput.disabled = true;
@@ -524,8 +631,8 @@
                     this.addMessage(result.transcript, 'user');
                     this.addMessage(result.response, 'zion');
 
-                    // Play audio response if available
-                    if (result.audio && result.audio.data) {
+                    // Play audio response if available and voice is enabled
+                    if (result.audio && result.audio.data && this.voiceOutputEnabled) {
                         this.playAudioResponse(result.audio.data);
                     }
 
@@ -609,7 +716,7 @@
                         },
                         body: JSON.stringify({
                             message,
-                            generateSpeech: generateSpeech && this.voiceEnabled
+                            generateSpeech: (generateSpeech && this.voiceEnabled && this.voiceOutputEnabled)
                         })
                     });
 
@@ -618,8 +725,8 @@
                     if (data.response) {
                         this.addMessage(data.response, 'zion');
 
-                        // Play audio response if available
-                        if (data.audio && data.audio.data) {
+                        // Play audio response if available and voice is enabled
+                        if (data.audio && data.audio.data && this.voiceOutputEnabled) {
                             this.playAudioResponse(data.audio.data);
                         }
                     } else {

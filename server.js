@@ -215,7 +215,8 @@ app.post('/api/zion/transcribe', audioUpload.single('audio'), async (req, res) =
  */
 app.post('/api/zion/voice-chat', audioUpload.single('audio'), async (req, res) => {
   try {
-    const { userId = 'tiffani' } = req.body;
+    const { userId = 'tiffani', generateSpeech = 'true' } = req.body;
+    const shouldGenerateSpeech = generateSpeech === 'true';
 
     if (!req.file) {
       return res.status(400).json({ error: 'Audio file is required' });
@@ -231,7 +232,7 @@ app.post('/api/zion/voice-chat', audioUpload.single('audio'), async (req, res) =
       // Transcribe audio to text
       transcribeAudio(req.file.buffer, req.file.originalname),
 
-      // Process audio directly for AI response with voice output
+      // Process audio directly for AI response with optional voice output
       (async () => {
         // First transcribe for AI processing
         const transcript = await transcribeAudio(req.file.buffer, req.file.originalname);
@@ -239,9 +240,12 @@ app.post('/api/zion/voice-chat', audioUpload.single('audio'), async (req, res) =
         // Generate AI response
         const aiResponse = await generateZionResponse(transcript, userId);
 
-        // Generate voice response in parallel
-        const voiceConfig = getVoiceConfig();
-        const audioBuffer = await textToSpeech(aiResponse, voiceConfig);
+        // Generate voice response only if requested
+        let audioBuffer = null;
+        if (shouldGenerateSpeech) {
+          const voiceConfig = getVoiceConfig();
+          audioBuffer = await textToSpeech(aiResponse, voiceConfig);
+        }
 
         return {
           transcript,
@@ -266,7 +270,9 @@ app.post('/api/zion/voice-chat', audioUpload.single('audio'), async (req, res) =
       const result = aiResponseResult.value;
       transcript = result.transcript; // Use the transcript from AI processing
       aiResponse = result.aiResponse;
-      audioData = result.audioBuffer.toString('base64');
+      if (result.audioBuffer) {
+        audioData = result.audioBuffer.toString('base64');
+      }
     } else {
       console.error('[ZION VOICE] AI processing failed:', aiResponseResult.reason);
       aiResponse = 'I had trouble processing your message. Could you try again?';
