@@ -5,9 +5,6 @@
 --
 -- Zion's Memory System for Tiffani
 
--- Enable Row Level Security
-ALTER DATABASE postgres SET "app.current_user_id" = '';
-
 -- Chat history storage
 CREATE TABLE IF NOT EXISTS zion_tiffani_conversations (
     id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
