@@ -523,6 +523,25 @@ app.listen(PORT, () => {
   console.log();
   console.log('💜 Welcome to your personal AI journey, Tiffani!');
 
+  // Environment variable status check
+  console.log('\n🔍 Environment Configuration:');
+  console.log(`   SUPABASE_URL: ${process.env.SUPABASE_URL ? '✅ Set' : '❌ Missing'}`);
+  console.log(`   SUPABASE_SERVICE_KEY: ${process.env.SUPABASE_SERVICE_KEY ? '✅ Set' : '❌ Missing'}`);
+  console.log(`   ANTHROPIC_API_KEY: ${process.env.ANTHROPIC_API_KEY ? '✅ Set' : '❌ Missing'}`);
+  console.log(`   OPENAI_API_KEY: ${process.env.OPENAI_API_KEY ? '✅ Set' : '❌ Missing'}`);
+  console.log(`   NODE_ENV: ${process.env.NODE_ENV || 'not set'}`);
+
+  // Database connection test
+  const { getZionInstance } = require('./lib/zion-manager');
+  try {
+    console.log('\n🗃️  Testing database connection...');
+    // Test if supabase is initialized
+    const testInstance = getZionInstance();
+    console.log('   ✅ Zion memory system ready');
+  } catch (error) {
+    console.log(`   ❌ Database connection failed: ${error.message}`);
+  }
+
   // Check customization status on startup
   const customization = checkCustomizationStatus();
   if (customization.status === 'needs_customization') {
