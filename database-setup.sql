@@ -69,6 +69,7 @@ CREATE TABLE IF NOT EXISTS zion_tiffani_personality_evolution (
 ALTER TABLE zion_tiffani_conversations ADD COLUMN IF NOT EXISTS user_id TEXT;
 ALTER TABLE zion_tiffani_conversations ADD COLUMN IF NOT EXISTS emotional_tone TEXT;
 ALTER TABLE zion_tiffani_conversations ADD COLUMN IF NOT EXISTS importance_score INTEGER DEFAULT 5 CHECK (importance_score BETWEEN 1 AND 10);
+ALTER TABLE zion_tiffani_memories ADD COLUMN IF NOT EXISTS importance INTEGER DEFAULT 5 CHECK (importance BETWEEN 1 AND 10);
 
 -- Create indexes for performance
 CREATE INDEX IF NOT EXISTS idx_conversations_user ON zion_tiffani_conversations(user_id);
