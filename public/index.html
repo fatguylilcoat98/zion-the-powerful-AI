@@ -148,10 +148,17 @@
         .voice-button.recording {
             background: linear-gradient(135deg, #dc3545 0%, #c82333 100%);
             animation: pulse 1.5s infinite;
+            box-shadow: 0 0 20px rgba(220, 53, 69, 0.6);
         }
 
         .voice-button.processing {
             background: linear-gradient(135deg, #ffc107 0%, #e0a800 100%);
+        }
+
+        .voice-button.listening {
+            background: linear-gradient(135deg, #28a745 0%, #20c997 100%);
+            animation: pulse 1.5s infinite;
+            box-shadow: 0 0 20px rgba(40, 167, 69, 0.6);
         }
 
         @keyframes pulse {
@@ -287,10 +294,10 @@
         </div>
 
         <div class="chat-input">
-            <button id="voiceButton" class="voice-button" title="Hold to record voice message" disabled>
+            <button id="voiceButton" class="voice-button" title="Click to start/stop voice recording" disabled>
                 🎤
             </button>
-            <input type="text" id="messageInput" placeholder="Type your message to Zion..." disabled>
+            <input type="text" id="messageInput" placeholder="Type your message or record with microphone..." disabled>
             <button id="sendButton" disabled>Send</button>
         </div>
 
@@ -336,18 +343,8 @@
                     }
                 });
 
-                // Voice recording
-                this.voiceButton.addEventListener('mousedown', () => this.startRecording());
-                this.voiceButton.addEventListener('mouseup', () => this.stopRecording());
-                this.voiceButton.addEventListener('mouseleave', () => this.stopRecording());
-                this.voiceButton.addEventListener('touchstart', (e) => {
-                    e.preventDefault();
-                    this.startRecording();
-                });
-                this.voiceButton.addEventListener('touchend', (e) => {
-                    e.preventDefault();
-                    this.stopRecording();
-                });
+                // Voice recording - click to start/stop
+                this.voiceButton.addEventListener('click', () => this.toggleRecording());
             }
 
             async checkZionStatus() {
@@ -381,7 +378,7 @@
 
                     if (this.voiceEnabled) {
                         this.voiceButton.disabled = false;
-                        this.voiceButton.title = 'Hold to record voice message';
+                        this.voiceButton.title = 'Click to start voice recording';
                         console.log('Voice capabilities enabled');
                     } else {
                         this.voiceButton.disabled = true;
@@ -396,9 +393,17 @@
             }
 
             enableChat() {
-                this.messageInput.disabled = false;
-                this.sendButton.disabled = false;
-                this.messageInput.focus();
+                this.resetVoiceUI();
+            }
+
+            toggleRecording() {
+                if (this.isProcessing) return;
+
+                if (this.isRecording) {
+                    this.stopRecording();
+                } else {
+                    this.startRecording();
+                }
             }
 
             async startRecording() {
@@ -420,15 +425,21 @@
                         }
                     };
 
-                    this.mediaRecorder.onstop = () => {
-                        this.processRecording();
-                    };
-
                     this.mediaRecorder.start();
 
-                    this.voiceButton.classList.add('recording');
-                    this.voiceButton.textContent = '🔴';
-                    this.showVoiceStatus('🎙️ Recording... (release to send)', 'processing');
+                    this.voiceButton.classList.add('listening');
+                    this.voiceButton.textContent = '🎙️';
+                    this.voiceButton.title = 'Click to stop recording';
+
+                    // Enable submit button and change text for voice mode
+                    this.sendButton.textContent = 'Send Voice';
+                    this.sendButton.disabled = false;
+
+                    // Disable text input while recording
+                    this.messageInput.disabled = true;
+                    this.messageInput.placeholder = 'Recording... Click mic to stop or Send Voice to process';
+
+                    this.showVoiceStatus('🎙️ Listening... Click mic to stop or hit Send Voice', 'processing');
 
                 } catch (error) {
                     console.error('Failed to start recording:', error);
@@ -446,20 +457,34 @@
                 // Stop all tracks to release microphone
                 this.mediaRecorder.stream.getTracks().forEach(track => track.stop());
 
-                this.voiceButton.classList.remove('recording');
-                this.voiceButton.classList.add('processing');
-                this.voiceButton.textContent = '⏳';
-                this.showVoiceStatus('⚡ Preparing parallel processing...', 'processing');
+                this.voiceButton.classList.remove('listening');
+                this.voiceButton.textContent = '🎤';
+                this.voiceButton.title = 'Click to start voice recording';
+
+                // Keep submit button enabled for processing the recording
+                this.sendButton.textContent = 'Process Voice';
+                this.sendButton.disabled = false;
+
+                // Re-enable text input
+                this.messageInput.disabled = false;
+                this.messageInput.placeholder = 'Type your message or record with microphone...';
+
+                this.showVoiceStatus('🔊 Recording stopped. Click "Process Voice" to send', 'success');
             }
 
             async processRecording() {
-                if (this.audioChunks.length === 0) {
-                    this.resetVoiceButton();
+                if (!this.audioChunks || this.audioChunks.length === 0) {
+                    this.resetVoiceUI();
                     this.hideVoiceStatus();
+                    this.showVoiceStatus('❌ No recording to process', 'error');
+                    setTimeout(() => this.hideVoiceStatus(), 3000);
                     return;
                 }
 
                 this.isProcessing = true;
+                this.voiceButton.disabled = true;
+                this.sendButton.disabled = true;
+                this.sendButton.textContent = 'Processing...';
                 this.showVoiceStatus('🔄 Processing speech & generating response...', 'processing');
 
                 try {
@@ -513,18 +538,26 @@
                     setTimeout(() => this.hideVoiceStatus(), 3000);
                 } finally {
                     this.isProcessing = false;
-                    this.resetVoiceButton();
+                    this.audioChunks = []; // Clear the recording
+                    this.resetVoiceUI();
                     this.hideTypingIndicator();
-                    this.messageInput.disabled = false;
-                    this.sendButton.disabled = false;
-                    this.messageInput.focus();
                 }
             }
 
             resetVoiceButton() {
-                this.voiceButton.classList.remove('recording', 'processing');
+                this.voiceButton.classList.remove('recording', 'processing', 'listening');
                 this.voiceButton.textContent = '🎤';
+                this.voiceButton.title = 'Click to start voice recording';
                 this.voiceButton.disabled = !this.voiceEnabled;
+            }
+
+            resetVoiceUI() {
+                this.resetVoiceButton();
+                this.sendButton.textContent = 'Send';
+                this.sendButton.disabled = false;
+                this.messageInput.disabled = false;
+                this.messageInput.placeholder = 'Type your message or record with microphone...';
+                this.messageInput.focus();
             }
 
             showVoiceStatus(message, type = 'default') {
@@ -550,6 +583,13 @@
             }
 
             async sendMessage(generateSpeech = false) {
+                // Check if we have a voice recording to process
+                if (this.audioChunks && this.audioChunks.length > 0) {
+                    await this.processRecording();
+                    return;
+                }
+
+                // Handle text message
                 const message = this.messageInput.value.trim();
                 if (!message) return;
 
