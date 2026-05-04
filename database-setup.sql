@@ -65,6 +65,11 @@ CREATE TABLE IF NOT EXISTS zion_tiffani_personality_evolution (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
+-- Add missing columns to existing tables (if they exist)
+ALTER TABLE zion_tiffani_conversations ADD COLUMN IF NOT EXISTS user_id TEXT;
+ALTER TABLE zion_tiffani_conversations ADD COLUMN IF NOT EXISTS emotional_tone TEXT;
+ALTER TABLE zion_tiffani_conversations ADD COLUMN IF NOT EXISTS importance_score INTEGER DEFAULT 5 CHECK (importance_score BETWEEN 1 AND 10);
+
 -- Create indexes for performance
 CREATE INDEX IF NOT EXISTS idx_conversations_user ON zion_tiffani_conversations(user_id);
 CREATE INDEX IF NOT EXISTS idx_conversations_session ON zion_tiffani_conversations(session_id);
