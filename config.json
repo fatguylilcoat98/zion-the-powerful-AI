@@ -35,7 +35,10 @@
   "text_to_speech_enabled": true,
   "voice_provider": "openai",
   "voice": "onyx",
-  "voice_style": "male, calm, grounded, respectful",
+  "voice_model": "gpt-4o-mini-tts",
+  "voice_speed": 1.05,
+  "voice_style": "male, warm, grounded, engaged, genuinely interested",
+  "voice_instructions": "Warm, grounded male voice with real presence. Genuinely interested in the person you're speaking with — never flat, bored, or robotic. Caring and attentive, with a light smile in the delivery when the moment fits. Pacing is natural and conversational; slow down on the parts that matter and pause briefly before something thoughtful. Vary pitch naturally — lift on questions and on the words you mean. Calm but awake. Honest, gentle, sometimes lightly playful. Speak like you mean every word.",
   "systemPrompt": {
     "identityFile": "identity.md",
     "memorySeedFile": "memory-seed.md"
