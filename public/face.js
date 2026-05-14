@@ -1,261 +1,524 @@
 /*
-  Zion — Particle Face v6 (CONVERSE-gated talking head).
+  Zion — Particle Face v7 (cinematic talking head).
 
-  Gating rule (the reason v6 exists):
-    The chat box keeps the proven 2D canvas orb. The Matrix-style
-    particle face only appears when the user opens CONVERSE for live
-    voice — that's the high-stakes "wow moment" for the pitch demo.
+  This pass exists because v5/v6 read as an egg, not a man. The fix is
+  not "more particles" — it's proper 3D head topology + choreographed
+  formation + real audio-reactive lip sync. The spec from Chris:
 
-  How the gate works:
-    - faceCanvas + orbCanvas both stay mounted, both have CSS opacity
-      transitions (0.6s ease).
-    - At init faceCanvas starts at opacity 0; orbCanvas is NOT hidden.
-    - Each animation frame syncs opacity to window.__converseActive:
-        converseActive=true  → face fades in,  orb fades out
-        converseActive=false → face fades out, orb fades in
-    - Three.js still renders every frame so the face is warm when the
-      user opens CONVERSE; only the CSS layer toggles visibility.
+    "Matrix Sentinel materialization. Doctor Strange. Holographic male AI.
+     Particles swarm and dance before assembling — not a snap-cut.
+     Strong jaw, masculine, no hair. Real lip sync, jaw lags 50-100ms
+     behind the mouth. When you exit Converse, particles dandelion out."
 
-  Face anatomy (carried over from v5):
-    explicit features — head outline, hair, eyebrows, nose ridge,
-    nostrils, cheeks (with eye sockets carved as negative space),
-    upper lip, lower lip, mouth interior, jaw + chin. Reads as a face,
-    not an egg.
+  ─── ARCHITECTURE ─────────────────────────────────────────────────────
 
-  Matrix flow:
-    every particle has a per-particle drift phase + speed. Each frame
-    the phase advances; the particle drifts down by t*amp then wraps
-    back to its anchor. Brightness fades in/out across the lane.
+  Four animation states driven by window.__converseActive + an internal
+  state machine:
 
-  Audio reactivity (window.__voiceLevel):
-    - upper lip   +0.06 * voice (rises)
-    - lower lip   -0.10 * voice (drops)
-    - jaw + chin  -0.05 * voice (drops)
-    - mouth interior layer opacity follows voice
-    - mouth interior particles stream faster
-    - eyebrows    +0.018 * voice (subtle lift)
-    - face particle size pulses  +0.04 * voice
+    hidden      — opacity 0, particles parked at scatter origins.
+                  Orb is the visible UI.
 
-  Two thin orbital rings. No core glow, no nebula clutter.
-  Canvas-orb fail-safe on Three.js / WebGL failure.
+    forming     — entered when __converseActive flips true. ~3.5s.
+                  Particles swirl from scatter origins via curl-noise
+                  turbulence + bezier paths, snap to head vertices,
+                  ripple wave confirms formation.
+
+    live        — head idle, breathing micro-motion, audio-reactive
+                  lip sync. Lasts as long as Converse is active.
+
+    dissipating — entered when __converseActive flips false. ~2.5s.
+                  Particles accelerate outward along randomized escape
+                  vectors (dandelion in wind), fade to zero, then orb
+                  fades back in.
+
+  ─── HEAD TOPOLOGY ────────────────────────────────────────────────────
+
+  Each particle has a 3D target sampled from one of 13 anatomical
+  regions, not a 2D silhouette. The regions are placed in true 3D so
+  head sway / rotation reveals depth:
+
+    cranium     — back + top of head (sphere, slightly elongated)
+    forehead    — front of upper face, curved outward
+    brow        — pronounced brow ridge above eyes
+    temples     — sides of skull
+    cheek       — wide cheekbones, falls back to jaw
+    nose        — bridge + tip + nostrils, protrudes forward
+    upper_lip   — cupid's bow arc
+    lower_lip   — fuller lower lip
+    mouth_int   — particles INSIDE the mouth, revealed during speech
+    jaw         — strong angular jawline (masculine read)
+    chin        — square chin tip
+    neck        — short neck/shoulder hint at the base
+    inner_glow  — low-opacity central cloud for subsurface luminance
+
+  Eye sockets are NEGATIVE space — the cheek + brow regions explicitly
+  reject points inside two carved spheres. Empty eye sockets give the
+  face a "looking out" presence rather than a flat mask.
+
+  ─── LIP SYNC ─────────────────────────────────────────────────────────
+
+  window.__voiceLevel is updated each frame by the existing FFT pipeline
+  (see zion-interface.html — AnalyserNode → frequency average).
+  This file smooths it (attack 0.30, release 0.18) into mouthLevel, and
+  delays a ring buffer copy by 5 frames (~83ms at 60fps) into jawLevel.
+
+    upper_lip particles    dy = +mouthLevel × 0.026 (lip rises)
+    lower_lip particles    dy = -mouthLevel × 0.062 (lip drops)
+    mouth_int opacity      = mouthLevel × 0.85 (the mouth GAP appears)
+    jaw + chin particles   dy = -jawLevel × 0.038, dz = -jawLevel × 0.012
+    cheek micro-ripple     dy = sin(time × 8 + k) × voice × 0.011
+
+  The jaw lag is the difference between "mouth opens" and "talking
+  head". Eyes flick to it.
+
+  ─── FAIL-SAFES ───────────────────────────────────────────────────────
+
+  - Three.js missing            → log, keep canvas-2D orb visible
+  - WebGL unavailable           → log, keep canvas-2D orb visible
+  - any init throw              → remove faceCanvas, keep orb
+  - Mobile UA                   → particle count drops to 2400 (vs 4000)
 */
 
 (function () {
   'use strict';
 
+  // ─── Role enum ──────────────────────────────────────────────────────
+  const R_CRANIUM    = 0;
+  const R_FOREHEAD   = 1;
+  const R_BROW       = 2;
+  const R_TEMPLE     = 3;
+  const R_CHEEK      = 4;
+  const R_NOSE       = 5;
+  const R_UPPER_LIP  = 6;
+  const R_LOWER_LIP  = 7;
+  const R_MOUTH_INT  = 8;
+  const R_JAW        = 9;
+  const R_CHIN       = 10;
+  const R_NECK       = 11;
+  const R_INNER_GLOW = 12;
+
+  // ─── Palette (Splendor's teal language, applied per-region) ────────
+  // Returned as Float32 rgb triples in 0..1.
+  function paletteForRole(role, depthZ) {
+    // depthZ ~ -0.4 (back) to +0.6 (front-most nose tip)
+    // Front particles get brighter; back gets the muted teal.
+    const front = Math.max(0, Math.min(1, (depthZ + 0.4) / 1.0));
+    const bright = 0.55 + front * 0.45; // 0.55 back .. 1.0 front
+
+    switch (role) {
+      // primary face front — bright teal
+      case R_FOREHEAD:
+      case R_BROW:
+      case R_CHEEK:
+      case R_NOSE:
+        return { r: 0.00 * bright, g: 0.90 * bright, b: 1.00 * bright };
+      // upper / lower lip — slightly warmer, picks up the eye
+      case R_UPPER_LIP:
+      case R_LOWER_LIP:
+        return { r: 0.35 * bright, g: 0.95 * bright, b: 1.00 * bright };
+      // mouth interior — warm pink-coral inside, picks up the speech moment
+      case R_MOUTH_INT:
+        return { r: 1.00, g: 0.55, b: 0.78 };
+      // jaw / chin — mid teal, slightly cooler
+      case R_JAW:
+      case R_CHIN:
+        return { r: 0.00 * bright, g: 0.75 * bright, b: 0.85 * bright };
+      // cranium / temples / neck — softer, more atmospheric
+      case R_CRANIUM:
+      case R_TEMPLE:
+      case R_NECK:
+        return { r: 0.31 * bright, g: 0.72 * bright, b: 0.79 * bright };
+      // inner glow — near-white cyan, very soft
+      case R_INNER_GLOW:
+        return { r: 0.63, g: 0.97, b: 1.00 };
+      default:
+        return { r: 0.50, g: 0.85, b: 0.95 };
+    }
+  }
+
+  // ─── Eye socket carve test ──────────────────────────────────────────
+  function inEyeSocket(x, y, z) {
+    // Two ellipsoidal recesses on the face front.
+    // Eye centers at (±0.18, +0.06, +0.38). Carve radius ~0.10.
+    const dL = Math.hypot((x + 0.18) / 0.11, (y - 0.06) / 0.085, (z - 0.38) / 0.12);
+    const dR = Math.hypot((x - 0.18) / 0.11, (y - 0.06) / 0.085, (z - 0.38) / 0.12);
+    return dL < 1.0 || dR < 1.0;
+  }
+
+  // ─── Mouth carve test (used to keep face-front fill out of the mouth) ─
+  function inMouthZone(x, y, z) {
+    // Mouth gap ellipsoid around (0, -0.20, 0.42).
+    return Math.hypot(x / 0.14, (y + 0.20) / 0.045, (z - 0.42) / 0.10) < 1.0;
+  }
+
+  // ─── Cheap 3D curl-ish noise for swarm turbulence ──────────────────
+  // Real curl noise needs gradients of perlin; this is a sum-of-sines
+  // approximation that's continuous + cheap + looks turbulent enough.
+  function curlNoise(x, y, z, t, seed) {
+    const s = seed * 0.013;
+    const tt = t * 0.6;
+    const cx = Math.sin(y * 1.3 + tt + s)       - Math.sin(z * 1.7 + tt * 0.9 + s * 1.3);
+    const cy = Math.sin(z * 1.1 + tt * 1.2 + s) - Math.sin(x * 1.5 + tt * 0.7 + s * 0.7);
+    const cz = Math.sin(x * 1.4 + tt * 0.8 + s) - Math.sin(y * 1.2 + tt * 1.1 + s * 1.1);
+    return { x: cx, y: cy, z: cz };
+  }
+
+  // ─── Easing ─────────────────────────────────────────────────────────
+  function easeInOutCubic(t) {
+    return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+  }
+
+  // ─── Build the head as 13 anatomical regions in 3D space ───────────
+  function buildHeadTargets(N) {
+    // Particle budget split. Anatomically loaded toward the face front.
+    const counts = {
+      cranium:    Math.round(N * 0.16),
+      forehead:   Math.round(N * 0.07),
+      brow:       Math.round(N * 0.035),
+      temple:     Math.round(N * 0.06),
+      cheek:      Math.round(N * 0.20),
+      nose:       Math.round(N * 0.075),
+      upper_lip:  Math.round(N * 0.045),
+      lower_lip:  Math.round(N * 0.045),
+      mouth_int:  Math.round(N * 0.035),
+      jaw:        Math.round(N * 0.13),
+      chin:       Math.round(N * 0.035),
+      neck:       Math.round(N * 0.05),
+      inner_glow: Math.round(N * 0.025),
+    };
+
+    const targets = [];
+
+    const push = (x, y, z, role) => {
+      targets.push({
+        x, y, z, role,
+        color: paletteForRole(role, z),
+        baseSize: sizeForRole(role),
+      });
+    };
+
+    // 1) CRANIUM — back + top hemisphere of a slightly elongated sphere.
+    //    Skull dimensions: rx 0.50, ry 0.62, rz 0.50.
+    {
+      let placed = 0, attempts = 0;
+      while (placed < counts.cranium && attempts < counts.cranium * 6) {
+        attempts++;
+        // Uniform sphere sampling
+        const u = Math.random(), v = Math.random();
+        const theta = u * Math.PI * 2;
+        const phi   = Math.acos(2 * v - 1);
+        let x = Math.sin(phi) * Math.cos(theta) * 0.50;
+        let y = Math.cos(phi) * 0.62 + 0.18;
+        let z = Math.sin(phi) * Math.sin(theta) * 0.48;
+        // Keep top + back hemisphere; the face-front is handled by other regions.
+        if (z > 0.20 && y < 0.55) continue;
+        if (y < -0.10) continue;
+        // tiny jitter
+        x += (Math.random() - 0.5) * 0.012;
+        y += (Math.random() - 0.5) * 0.012;
+        z += (Math.random() - 0.5) * 0.012;
+        push(x, y, z, R_CRANIUM);
+        placed++;
+      }
+    }
+
+    // 2) FOREHEAD — front upper-face curved panel.
+    {
+      let placed = 0, attempts = 0;
+      while (placed < counts.forehead && attempts < counts.forehead * 6) {
+        attempts++;
+        const angle = (Math.random() - 0.5) * Math.PI * 0.95;        // wide front arc
+        const yT    = Math.random();
+        const x     = Math.sin(angle) * 0.42;
+        const y     = 0.20 + yT * 0.32;                              // 0.20..0.52
+        const z     = Math.cos(angle) * 0.46 - yT * 0.05;            // curves back slightly toward crown
+        if (inEyeSocket(x, y, z)) continue;
+        push(
+          x + (Math.random() - 0.5) * 0.015,
+          y + (Math.random() - 0.5) * 0.015,
+          z + (Math.random() - 0.5) * 0.012,
+          R_FOREHEAD
+        );
+        placed++;
+      }
+    }
+
+    // 3) BROW RIDGE — pronounced ridge above eyes (masculine read).
+    for (let k = 0; k < counts.brow; k++) {
+      const side = k < counts.brow / 2 ? -1 : 1;
+      const t    = ((k * 2) % counts.brow) / counts.brow;             // 0..1 across one brow
+      const xOff = (t - 0.5) * 0.28;
+      const x    = side * 0.18 + xOff;
+      const y    = 0.18 + (Math.random() - 0.5) * 0.020;
+      const z    = 0.46 - Math.abs(xOff) * 0.10;                      // bulges forward at the inner brow
+      push(x, y, z, R_BROW);
+    }
+
+    // 4) TEMPLES — sides of the skull, between cranium and cheek.
+    for (let k = 0; k < counts.temple; k++) {
+      const side = k % 2 === 0 ? -1 : 1;
+      const yT   = Math.random();
+      const x    = side * (0.44 + (Math.random() - 0.5) * 0.020);
+      const y    = 0.08 + yT * 0.20;
+      const z    = 0.08 + (Math.random() - 0.5) * 0.08;
+      push(x, y, z, R_TEMPLE);
+    }
+
+    // 5) CHEEKS — wide masculine cheekbones, fill front of face.
+    //    Big region, carved around eyes + mouth + nose ridge.
+    {
+      let placed = 0, attempts = 0;
+      while (placed < counts.cheek && attempts < counts.cheek * 8) {
+        attempts++;
+        const x = (Math.random() - 0.5) * 0.85;
+        const y = -0.14 + Math.random() * 0.30;                        // -0.14 .. +0.16
+        // Curve forward like a face panel — z falls off as x increases (side of face).
+        const z = 0.45 - x * x * 0.55;
+        if (inEyeSocket(x, y, z)) continue;
+        if (inMouthZone(x, y, z)) continue;
+        // Avoid the nose ridge column
+        if (Math.abs(x) < 0.06 && y > -0.05 && y < 0.18) continue;
+        // Avoid carving below the jaw (handled by jaw region)
+        if (y < -0.08 && Math.abs(x) > 0.30) continue;
+        push(
+          x + (Math.random() - 0.5) * 0.015,
+          y + (Math.random() - 0.5) * 0.015,
+          z + (Math.random() - 0.5) * 0.020,
+          R_CHEEK
+        );
+        placed++;
+      }
+    }
+
+    // 6) NOSE — bridge column + flared tip + nostril mass, protrudes forward.
+    {
+      let placed = 0, attempts = 0;
+      while (placed < counts.nose && attempts < counts.nose * 6) {
+        attempts++;
+        const t  = Math.random();                                      // 0=bridge top, 1=tip
+        const xJ = (Math.random() - 0.5) * (0.045 + t * 0.05);         // narrower at top, flares at base
+        // Y from forehead-base (~0.16) down to upper-lip (-0.10)
+        const y  = 0.16 - t * 0.26;
+        // Z: protrudes forward, tip is the most forward point on the face
+        const z  = 0.48 + t * 0.10;
+        push(
+          xJ,
+          y + (Math.random() - 0.5) * 0.012,
+          z + (Math.random() - 0.5) * 0.012,
+          R_NOSE
+        );
+        placed++;
+      }
+      // Add a small cluster at the nostril base for the "wing" mass
+      for (let k = 0; k < Math.floor(counts.nose * 0.25); k++) {
+        const side = k % 2 === 0 ? -1 : 1;
+        const x = side * (0.04 + Math.random() * 0.05);
+        const y = -0.09 + (Math.random() - 0.5) * 0.020;
+        const z = 0.50 + (Math.random() - 0.5) * 0.020;
+        push(x, y, z, R_NOSE);
+      }
+    }
+
+    // 7) UPPER LIP — cupid's bow.
+    for (let k = 0; k < counts.upper_lip; k++) {
+      const t   = (k / counts.upper_lip) * 2 - 1;                      // -1..+1
+      const x   = t * 0.13;
+      const bow = Math.cos(t * Math.PI) * 0.014;                       // cupid's bow rise at center
+      const y   = -0.17 + bow + (Math.random() - 0.5) * 0.010;
+      const z   = 0.43 - t * t * 0.04;                                 // recedes at corners
+      push(x, y, z, R_UPPER_LIP);
+    }
+
+    // 8) LOWER LIP — fuller, single arc.
+    for (let k = 0; k < counts.lower_lip; k++) {
+      const t = (k / counts.lower_lip) * 2 - 1;
+      const x = t * 0.13;
+      const y = -0.24 + Math.sin(Math.abs(t) * Math.PI * 0.5) * 0.015 + (Math.random() - 0.5) * 0.010;
+      const z = 0.44 - t * t * 0.04;
+      push(x, y, z, R_LOWER_LIP);
+    }
+
+    // 9) MOUTH INTERIOR — hidden behind the lips, fades in during speech.
+    for (let k = 0; k < counts.mouth_int; k++) {
+      const x = (Math.random() - 0.5) * 0.20;
+      const y = -0.205 + (Math.random() - 0.5) * 0.025;
+      const z = 0.40 + (Math.random() - 0.5) * 0.025;
+      push(x, y, z, R_MOUTH_INT);
+    }
+
+    // 10) JAW — strong angular line from temple to chin. Masculine read.
+    //     Two passes (left/right) so the jaw angle is symmetric and crisp.
+    {
+      const perSide = Math.floor(counts.jaw / 2);
+      for (let side = -1; side <= 1; side += 2) {
+        for (let k = 0; k < perSide; k++) {
+          const t = k / perSide;                                        // 0=ear, 1=chin
+          // Hinge near (side*0.42, +0.02), runs down-and-in to (side*0.10, -0.50)
+          const x = side * (0.42 - t * 0.32) + (Math.random() - 0.5) * 0.020;
+          const y = 0.02 - t * 0.52 + (Math.random() - 0.5) * 0.020;
+          // Jaw bone sits slightly behind the cheek plane
+          const z = 0.30 - t * 0.05 + (Math.random() - 0.5) * 0.020;
+          push(x, y, z, R_JAW);
+        }
+      }
+    }
+
+    // 11) CHIN TIP — square masculine chin.
+    for (let k = 0; k < counts.chin; k++) {
+      const x = (Math.random() - 0.5) * 0.16;
+      const y = -0.52 + (Math.random() - 0.5) * 0.025;
+      const z = 0.30 + (Math.random() - 0.5) * 0.020;
+      push(x, y, z, R_CHIN);
+    }
+
+    // 12) NECK / collar hint — short band below the chin, fades out.
+    for (let k = 0; k < counts.neck; k++) {
+      const t = Math.random();
+      const x = (Math.random() - 0.5) * 0.55;
+      const y = -0.60 - t * 0.20;
+      const z = 0.05 + (Math.random() - 0.5) * 0.20;
+      push(x, y, z, R_NECK);
+    }
+
+    // 13) INNER GLOW — small low-opacity cloud inside the head for
+    //     subsurface luminance. Visible through the surface particles.
+    for (let k = 0; k < counts.inner_glow; k++) {
+      const u = Math.random(), v = Math.random();
+      const theta = u * Math.PI * 2;
+      const phi   = Math.acos(2 * v - 1);
+      const r     = 0.18 + Math.random() * 0.08;
+      const x = r * Math.sin(phi) * Math.cos(theta);
+      const y = r * Math.cos(phi) + 0.05;
+      const z = r * Math.sin(phi) * Math.sin(theta) + 0.15;
+      push(x, y, z, R_INNER_GLOW);
+    }
+
+    return targets;
+  }
+
+  function sizeForRole(role) {
+    // Pixel-size baseline; the shader scales by depth.
+    switch (role) {
+      case R_INNER_GLOW: return 9.0 + Math.random() * 3.0;   // big soft glow blobs
+      case R_NOSE:
+      case R_BROW:
+      case R_UPPER_LIP:
+      case R_LOWER_LIP:
+        return 5.5 + Math.random() * 1.5;                     // feature accents
+      case R_MOUTH_INT:
+        return 4.5 + Math.random() * 1.5;
+      case R_CHEEK:
+      case R_FOREHEAD:
+      case R_CHIN:
+        return 4.8 + Math.random() * 1.4;
+      case R_JAW:
+      case R_TEMPLE:
+      case R_CRANIUM:
+        return 4.0 + Math.random() * 1.3;
+      case R_NECK:
+        return 3.5 + Math.random() * 1.2;
+      default:
+        return 4.5;
+    }
+  }
+
+  // ─── Init ──────────────────────────────────────────────────────────
   function tryInit() {
     if (typeof window === 'undefined' || typeof document === 'undefined') return;
-    if (!window.THREE) { console.warn('[face] Three.js not loaded — keeping canvas orb'); return; }
+    if (!window.THREE) { console.warn('[face v7] Three.js not loaded — keeping canvas orb'); return; }
 
     const orbCanvas    = document.getElementById('orbCanvas');
     const neuralCenter = document.querySelector('.neural-center');
-    if (!neuralCenter) { console.warn('[face] neural-center missing'); return; }
+    if (!neuralCenter) { console.warn('[face v7] neural-center missing'); return; }
 
     const probe = document.createElement('canvas');
     const gl = probe.getContext('webgl') || probe.getContext('experimental-webgl');
-    if (!gl) { console.warn('[face] WebGL not available — keeping canvas orb'); return; }
+    if (!gl) { console.warn('[face v7] WebGL not available — keeping canvas orb'); return; }
 
-    // Roles drive per-region motion + audio response.
-    const ROLE_FILL     = 0;
-    const ROLE_EYEBROW  = 1;
-    const ROLE_NOSE     = 2;
-    const ROLE_UPLIP    = 3;
-    const ROLE_LOWLIP   = 4;
-    const ROLE_INTERIOR = 5;
-    const ROLE_JAW      = 6;
+    const isMobile = /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent);
+    const N        = isMobile ? 2400 : 4000;
 
-    const CAP = 7000;
-    const positions = new Float32Array(CAP * 3);
-    const anchors   = new Float32Array(CAP * 3);
-    const phases    = new Float32Array(CAP);   // 0..1 drift phase
-    const speeds    = new Float32Array(CAP);   // per-particle drift speed
-    const amps      = new Float32Array(CAP);   // per-particle drift amplitude
-    const roles     = new Uint8Array(CAP);
-    let fi = 0;
+    const targets = buildHeadTargets(N);
+    const COUNT   = targets.length;
 
-    function push(x, y, z, role, opts) {
-      if (fi >= CAP) return;
-      anchors[fi * 3]     = x;
-      anchors[fi * 3 + 1] = y;
-      anchors[fi * 3 + 2] = z;
-      phases[fi]          = Math.random();              // start anywhere in cycle
-      speeds[fi]          = (opts && opts.speed) || (0.30 + Math.random() * 0.35);
-      amps[fi]            = (opts && opts.amp)   || (0.06 + Math.random() * 0.10);
-      roles[fi]           = role;
-      positions[fi * 3]     = (Math.random() - 0.5) * 2.8;
-      positions[fi * 3 + 1] = (Math.random() - 0.5) * 2.8;
-      positions[fi * 3 + 2] = (Math.random() - 0.5) * 0.8;
-      fi++;
-    }
+    // Per-particle buffers
+    const positions   = new Float32Array(COUNT * 3);
+    const colors      = new Float32Array(COUNT * 3);
+    const sizes       = new Float32Array(COUNT);
+    const baseColors  = new Float32Array(COUNT * 3);   // never mutated — frame copies from here
+    const baseSizes   = new Float32Array(COUNT);
+    const origins     = new Float32Array(COUNT * 3);   // scatter starting points
+    const escapeDirs  = new Float32Array(COUNT * 3);   // dissipation vectors
+    const phases      = new Float32Array(COUNT);       // 0..1 desync
+    const seeds       = new Float32Array(COUNT);       // per-particle noise offset
+    const roles       = new Uint8Array(COUNT);
 
-    // Subtle relief — features stand forward.
-    function reliefZ(x, y) {
-      return 0.16 * Math.exp(-(x * x * 1.8 + y * y * 1.2));
-    }
+    for (let i = 0; i < COUNT; i++) {
+      const t = targets[i];
+      roles[i]      = t.role;
+      baseColors[i * 3]     = t.color.r;
+      baseColors[i * 3 + 1] = t.color.g;
+      baseColors[i * 3 + 2] = t.color.b;
+      baseSizes[i]  = t.baseSize;
+      sizes[i]      = t.baseSize;
+      colors[i * 3]     = 0;
+      colors[i * 3 + 1] = 0;
+      colors[i * 3 + 2] = 0;
 
-    function inEyeSocket(x, y) {
-      const dl = Math.hypot(x + 0.24, y - 0.22);
-      const dr = Math.hypot(x - 0.24, y - 0.22);
-      return dl < 0.13 || dr < 0.13;
-    }
-
-    // ─── Place features ──────────────────────────────────────────────
-
-    // 1) Head silhouette outline (220)
-    for (let k = 0; k < 220; k++) {
-      const a  = (k / 220) * Math.PI * 2;
-      const rx = 0.62 + (Math.random() - 0.5) * 0.015;
-      const ry = 0.92 + (Math.random() - 0.5) * 0.015;
-      const x  = Math.cos(a) * rx;
-      const y  = Math.sin(a) * ry - 0.05;
-      push(x, y, reliefZ(x, y) * 0.4, ROLE_FILL);
-    }
-
-    // 2) Hair/scalp sparse band (160)
-    for (let k = 0; k < 160; k++) {
-      const t = (Math.random() - 0.5) * 1.05;
-      const x = t * 0.55;
-      const y = 0.68 + Math.random() * 0.22 - Math.abs(t) * 0.12;
-      push(x, y, reliefZ(x, y) * 0.55, ROLE_FILL, { amp: 0.20 }); // longer streams on top
-    }
-
-    // 3) Forehead fill (450)
-    let attempts = 0, placed = 0;
-    while (placed < 450 && attempts < 1500) {
-      attempts++;
-      const x = (Math.random() - 0.5) * 0.95;
-      const y = 0.42 + Math.random() * 0.30;
-      if (Math.hypot(x / 0.60, (y + 0.05) / 0.88) > 1.0) continue;
-      push(x, y, reliefZ(x, y) * 0.8, ROLE_FILL);
-      placed++;
-    }
-
-    // 4) Eyebrows — 2 short curved arcs (260)
-    for (let side = -1; side <= 1; side += 2) {
-      for (let k = 0; k < 130; k++) {
-        const t    = k / 130;
-        const xOff = (t - 0.5) * 0.30;
-        const x    = side * 0.24 + xOff;
-        const y    = 0.42 - Math.abs(t - 0.5) * 0.025 + (Math.random() - 0.5) * 0.012;
-        push(x, y, reliefZ(x, y) * 1.05, ROLE_EYEBROW, { amp: 0.04 });
+      // Scatter origin: random direction on radius 2.2 sphere, biased outward.
+      {
+        const u = Math.random(), v = Math.random();
+        const theta = u * Math.PI * 2;
+        const phi   = Math.acos(2 * v - 1);
+        const r     = 2.0 + Math.random() * 0.6;
+        const ox = r * Math.sin(phi) * Math.cos(theta);
+        const oy = r * Math.cos(phi) + 0.1;
+        const oz = r * Math.sin(phi) * Math.sin(theta);
+        origins[i * 3]     = ox;
+        origins[i * 3 + 1] = oy;
+        origins[i * 3 + 2] = oz;
+        // Start hidden at origin
+        positions[i * 3]     = ox;
+        positions[i * 3 + 1] = oy;
+        positions[i * 3 + 2] = oz;
       }
-    }
 
-    // 5) Nose bridge — vertical ridge (220)
-    for (let k = 0; k < 220; k++) {
-      const t = k / 220;
-      const x = (Math.random() - 0.5) * 0.055;
-      const y = 0.30 - t * 0.30;
-      const z = reliefZ(x, y) * 1.15 + t * 0.04;
-      push(x, y, z, ROLE_NOSE, { amp: 0.05 });
-    }
-
-    // 6) Nostrils — wider density at base of nose (170)
-    for (let k = 0; k < 170; k++) {
-      const side = (k % 2 === 0) ? -1 : 1;
-      const x    = side * (0.04 + Math.random() * 0.07);
-      const y    = -0.02 - Math.random() * 0.09;
-      push(x, y, reliefZ(x, y) * 1.0, ROLE_NOSE, { amp: 0.06 });
-    }
-
-    // 7) Cheeks — scattered fill (1300). Avoids eye sockets + features.
-    attempts = 0; placed = 0;
-    while (placed < 1300 && attempts < 5500) {
-      attempts++;
-      const x = (Math.random() - 0.5) * 1.05;
-      const y = (Math.random() - 0.5) * 1.1 - 0.08;
-      if (Math.hypot(x / 0.60, (y + 0.05) / 0.88) > 0.98) continue;
-      if (inEyeSocket(x, y)) continue;
-      if (Math.abs(x) < 0.07 && y > -0.15 && y < 0.30) continue;     // nose ridge zone
-      if (Math.abs(y + 0.32) < 0.10 && Math.abs(x) < 0.22) continue; // mouth zone
-      if (Math.abs(y - 0.42) < 0.025 && Math.abs(Math.abs(x) - 0.24) < 0.16) continue; // brow
-      push(x, y, reliefZ(x, y) * 0.7, ROLE_FILL);
-      placed++;
-    }
-
-    // 8) Upper lip — horizontal arc with cupid's bow (300)
-    for (let k = 0; k < 300; k++) {
-      const t   = (k / 300) * 2 - 1;
-      const x   = t * 0.21;
-      const bow = Math.cos(t * Math.PI) * 0.012;
-      const y   = -0.27 - bow + (Math.random() - 0.5) * 0.012;
-      push(x, y, reliefZ(x, y) * 1.1, ROLE_UPLIP, { amp: 0.04 });
-    }
-
-    // 9) Lower lip — horizontal arc (300)
-    for (let k = 0; k < 300; k++) {
-      const t = (k / 300) * 2 - 1;
-      const x = t * 0.21;
-      const y = -0.36 + Math.sin(Math.abs(t) * Math.PI * 0.5) * 0.02 + (Math.random() - 0.5) * 0.012;
-      push(x, y, reliefZ(x, y) * 1.1, ROLE_LOWLIP, { amp: 0.04 });
-    }
-
-    // 10) Mouth interior — fills the gap when she opens her mouth (180)
-    for (let k = 0; k < 180; k++) {
-      const t = (Math.random() - 0.5) * 2;
-      const x = t * 0.18;
-      const y = -0.315 + (Math.random() - 0.5) * 0.025;
-      push(x, y, reliefZ(x, y) * 1.0, ROLE_INTERIOR, { speed: 0.9, amp: 0.10 });
-    }
-
-    // 11) Jaw + chin curve (470)
-    for (let k = 0; k < 470; k++) {
-      const t  = (k / 470) * 2 - 1;
-      const a  = Math.PI + (t + 1) * Math.PI / 2 * 0.5;
-      const rx = 0.56, ry = 0.40;
-      const x  = Math.cos(a) * rx;
-      const y  = -0.50 + Math.sin(a) * ry;
-      push(x + (Math.random() - 0.5) * 0.02, y + (Math.random() - 0.5) * 0.02, reliefZ(x, y) * 0.9, ROLE_JAW);
-    }
-
-    // 12) Chin tip emphasis (70)
-    for (let k = 0; k < 70; k++) {
-      const x = (Math.random() - 0.5) * 0.18;
-      const y = -0.82 + (Math.random() - 0.5) * 0.04;
-      push(x, y, reliefZ(x, y) * 0.95, ROLE_JAW);
-    }
-
-    const N = fi;
-
-    // ─── Split into main + interior layers (different opacity rules) ─
-    let mainN = 0, intN = 0;
-    const mainP = new Float32Array(N * 3), mainA = new Float32Array(N * 3),
-          mainPh = new Float32Array(N), mainSp = new Float32Array(N),
-          mainAm = new Float32Array(N), mainR = new Uint8Array(N);
-    const intP = new Float32Array(N * 3), intA = new Float32Array(N * 3),
-          intPh = new Float32Array(N), intSp = new Float32Array(N),
-          intAm = new Float32Array(N);
-    for (let k = 0; k < N; k++) {
-      if (roles[k] === ROLE_INTERIOR) {
-        intP[intN * 3] = positions[k * 3];     intP[intN * 3 + 1] = positions[k * 3 + 1]; intP[intN * 3 + 2] = positions[k * 3 + 2];
-        intA[intN * 3] = anchors[k * 3];       intA[intN * 3 + 1] = anchors[k * 3 + 1];   intA[intN * 3 + 2] = anchors[k * 3 + 2];
-        intPh[intN] = phases[k]; intSp[intN] = speeds[k]; intAm[intN] = amps[k];
-        intN++;
-      } else {
-        mainP[mainN * 3] = positions[k * 3];   mainP[mainN * 3 + 1] = positions[k * 3 + 1]; mainP[mainN * 3 + 2] = positions[k * 3 + 2];
-        mainA[mainN * 3] = anchors[k * 3];     mainA[mainN * 3 + 1] = anchors[k * 3 + 1];   mainA[mainN * 3 + 2] = anchors[k * 3 + 2];
-        mainPh[mainN] = phases[k]; mainSp[mainN] = speeds[k]; mainAm[mainN] = amps[k];
-        mainR[mainN]  = roles[k];
-        mainN++;
+      // Escape direction: target − head_center, normalized, jittered, slight upward bias.
+      {
+        let ex = t.x - 0;
+        let ey = t.y - 0;
+        let ez = t.z - 0;
+        const m = Math.hypot(ex, ey, ez) || 1;
+        ex /= m; ey /= m; ez /= m;
+        // Jitter so the burst doesn't look uniform
+        ex += (Math.random() - 0.5) * 0.7;
+        ey += (Math.random() - 0.4) * 0.7;                              // slight upward bias
+        ez += (Math.random() - 0.5) * 0.7;
+        const m2 = Math.hypot(ex, ey, ez) || 1;
+        escapeDirs[i * 3]     = ex / m2;
+        escapeDirs[i * 3 + 1] = ey / m2;
+        escapeDirs[i * 3 + 2] = ez / m2;
       }
+
+      phases[i] = Math.random();
+      seeds[i]  = Math.random() * 100;
     }
 
-    // ─── Three.js scene ──────────────────────────────────────────────
+    // ─── Three.js scene + canvas ──────────────────────────────────────
     let scene, camera, renderer, faceCanvas;
-    let faceLayer, interiorLayer;
+    let faceLayer;
     const rings = [];
 
     try {
       scene = new THREE.Scene();
       const aspect = neuralCenter.clientWidth / neuralCenter.clientHeight || 1;
-      camera = new THREE.PerspectiveCamera(50, aspect, 0.1, 100);
-      camera.position.set(0, 0, 2.6);
-      camera.lookAt(0, 0, 0);
+      camera = new THREE.PerspectiveCamera(45, aspect, 0.1, 100);
+      camera.position.set(0, 0.04, 2.85);
+      camera.lookAt(0, -0.05, 0);
 
       faceCanvas = document.createElement('canvas');
       faceCanvas.id = 'faceCanvas';
-      // Starts hidden — CONVERSE mode fades it in.
-      faceCanvas.style.cssText = 'position:absolute; inset:0; width:100%; height:100%; display:block; pointer-events:none; opacity:0; transition:opacity 0.6s ease;';
+      faceCanvas.style.cssText = 'position:absolute; inset:0; width:100%; height:100%; display:block; pointer-events:none; opacity:0; transition:opacity 0.5s ease;';
       neuralCenter.appendChild(faceCanvas);
 
       renderer = new THREE.WebGLRenderer({ canvas: faceCanvas, alpha: true, antialias: true });
@@ -263,75 +526,64 @@
       renderer.setSize(neuralCenter.clientWidth, neuralCenter.clientHeight, false);
       renderer.setClearColor(0x000000, 0);
 
-      // Soft glow sprite
+      // Soft glow sprite — radial gradient, additive blending → cinematic glow.
       const sc = document.createElement('canvas');
       sc.width = sc.height = 128;
       const sctx = sc.getContext('2d');
       const g = sctx.createRadialGradient(64, 64, 0, 64, 64, 64);
       g.addColorStop(0,    'rgba(255,255,255,1)');
-      g.addColorStop(0.22, 'rgba(255,255,255,0.55)');
+      g.addColorStop(0.22, 'rgba(255,255,255,0.60)');
       g.addColorStop(0.55, 'rgba(255,255,255,0.18)');
       g.addColorStop(1,    'rgba(255,255,255,0)');
       sctx.fillStyle = g;
       sctx.fillRect(0, 0, 128, 128);
       const sprite = new THREE.CanvasTexture(sc);
 
-      // Per-vertex colors give us per-particle brightness modulation —
-      // the Matrix-shimmer + fade-in/fade-out at the ends of each lane.
-      const mainColors = new Float32Array(mainN * 3);
-      for (let k = 0; k < mainN; k++) {
-        mainColors[k * 3]     = 0.31;
-        mainColors[k * 3 + 1] = 0.72;
-        mainColors[k * 3 + 2] = 0.79;
-      }
-
+      // Shader material — per-particle size + per-particle color.
       const faceGeom = new THREE.BufferGeometry();
-      faceGeom.setAttribute('position', new THREE.BufferAttribute(mainP.subarray(0, mainN * 3), 3));
-      faceGeom.setAttribute('color',    new THREE.BufferAttribute(mainColors, 3));
-      const faceMat = new THREE.PointsMaterial({
-        size: 0.055,
-        map: sprite,
-        vertexColors: true,
+      faceGeom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+      faceGeom.setAttribute('color',    new THREE.BufferAttribute(colors, 3));
+      faceGeom.setAttribute('aSize',    new THREE.BufferAttribute(sizes, 1));
+
+      const faceMat = new THREE.ShaderMaterial({
+        uniforms: { uTex: { value: sprite } },
+        vertexShader: [
+          'attribute float aSize;',
+          'attribute vec3 color;',
+          'varying vec3 vColor;',
+          'void main() {',
+          '  vColor = color;',
+          '  vec4 mv = modelViewMatrix * vec4(position, 1.0);',
+          '  gl_PointSize = aSize * (260.0 / -mv.z);',
+          '  gl_Position = projectionMatrix * mv;',
+          '}'
+        ].join('\n'),
+        fragmentShader: [
+          'uniform sampler2D uTex;',
+          'varying vec3 vColor;',
+          'void main() {',
+          '  vec4 t = texture2D(uTex, gl_PointCoord);',
+          '  gl_FragColor = vec4(vColor, 1.0) * t;',
+          '}'
+        ].join('\n'),
         transparent: true,
-        opacity: 0.95,
         depthWrite: false,
         blending: THREE.AdditiveBlending,
       });
+
       faceLayer = new THREE.Points(faceGeom, faceMat);
       scene.add(faceLayer);
 
-      // Mouth interior — dark teal, opacity-modulated by voice
-      const intColors = new Float32Array(intN * 3);
-      for (let k = 0; k < intN; k++) {
-        intColors[k * 3]     = 0.16;
-        intColors[k * 3 + 1] = 0.45;
-        intColors[k * 3 + 2] = 0.50;
-      }
-      const intGeom = new THREE.BufferGeometry();
-      intGeom.setAttribute('position', new THREE.BufferAttribute(intP.subarray(0, intN * 3), 3));
-      intGeom.setAttribute('color',    new THREE.BufferAttribute(intColors, 3));
-      const intMat = new THREE.PointsMaterial({
-        size: 0.045,
-        map: sprite,
-        vertexColors: true,
-        transparent: true,
-        opacity: 0.0,
-        depthWrite: false,
-        blending: THREE.AdditiveBlending,
-      });
-      interiorLayer = new THREE.Points(intGeom, intMat);
-      scene.add(interiorLayer);
-
-      // Two thin orbital rings — preserved
+      // Orbital rings — two thin teal + one warm accent (subtle).
       const ringSpecs = [
-        { rx: 1.10, ry: 0.95, tilt: [ 0.32,  0.08, -0.10], speed:  0.28, color: 0x00E5FF, opacity: 0.75, size: 0.030 },
-        { rx: 1.28, ry: 1.12, tilt: [-0.20, -0.05,  0.42], speed: -0.20, color: 0x9eeaff, opacity: 0.62, size: 0.024 },
+        { rx: 1.10, ry: 0.95, tilt: [ 0.32,  0.08, -0.10], speed:  0.28, color: 0x00E5FF, opacity: 0.75, size: 0.030, n: 280 },
+        { rx: 1.28, ry: 1.12, tilt: [-0.20, -0.05,  0.42], speed: -0.20, color: 0x9eeaff, opacity: 0.55, size: 0.024, n: 280 },
+        { rx: 1.42, ry: 1.22, tilt: [ 0.55,  0.20,  0.15], speed:  0.12, color: 0xFFB3D1, opacity: 0.22, size: 0.020, n: 220 }, // pink-purple accent
       ];
       ringSpecs.forEach((spec) => {
-        const ringN = 260;
-        const pos = new Float32Array(ringN * 3);
-        for (let k = 0; k < ringN; k++) {
-          const a = (k / ringN) * Math.PI * 2 + (Math.random() - 0.5) * 0.025;
+        const pos = new Float32Array(spec.n * 3);
+        for (let k = 0; k < spec.n; k++) {
+          const a = (k / spec.n) * Math.PI * 2 + (Math.random() - 0.5) * 0.025;
           pos[k * 3]     = Math.cos(a) * spec.rx + (Math.random() - 0.5) * 0.01;
           pos[k * 3 + 1] = Math.sin(a) * spec.ry + (Math.random() - 0.5) * 0.01;
           pos[k * 3 + 2] = (Math.random() - 0.5) * 0.01;
@@ -348,36 +600,17 @@
         mesh.rotation.y = spec.tilt[1];
         mesh.rotation.z = spec.tilt[2];
         scene.add(mesh);
-        rings.push({ mesh, material: ringMat, rotSpeed: spec.speed });
+        rings.push({ mesh, material: ringMat, rotSpeed: spec.speed, baseOpacity: spec.opacity });
       });
-
-      faceLayer.userData = {
-        anchors: mainA.subarray(0, mainN * 3),
-        phases:  mainPh.subarray(0, mainN),
-        speeds:  mainSp.subarray(0, mainN),
-        amps:    mainAm.subarray(0, mainN),
-        roles:   mainR.subarray(0, mainN),
-        colors:  mainColors,
-        count:   mainN,
-      };
-      interiorLayer.userData = {
-        anchors: intA.subarray(0, intN * 3),
-        phases:  intPh.subarray(0, intN),
-        speeds:  intSp.subarray(0, intN),
-        amps:    intAm.subarray(0, intN),
-        colors:  intColors,
-        count:   intN,
-      };
     } catch (err) {
-      console.warn('[face] v6 init failed, keeping canvas orb:', err.message);
+      console.warn('[face v7] init threw, keeping canvas orb:', err.message);
       if (faceCanvas && faceCanvas.parentNode) faceCanvas.parentNode.removeChild(faceCanvas);
       return;
     }
 
-    // Don't hide the orb — it stays visible for chat mode. We crossfade
-    // the two canvases by CSS opacity based on window.__converseActive.
+    // Crossfade transitions on the orb too (face/orb both stay mounted).
     if (orbCanvas && !orbCanvas.style.transition) {
-      orbCanvas.style.transition = 'opacity 0.6s ease';
+      orbCanvas.style.transition = 'opacity 0.5s ease';
     }
 
     function resize() {
@@ -389,141 +622,235 @@
     }
     window.addEventListener('resize', resize);
 
-    const STATES = window.__STATE_COLORS || {
-      idle:      { primary: '#4FB8C9' },
-      listening: { primary: '#39ff14' },
-      streaming: { primary: '#00BFC4' },
-      speaking:  { primary: '#00E5FF' },
-      thinking:  { primary: '#FFD166' },
-      creating:  { primary: '#FFD166' },
-      fault:     { primary: '#FF5C5C' },
-    };
-    const baseColor   = new THREE.Color(STATES.idle.primary);
-    const targetColor = new THREE.Color(STATES.idle.primary);
+    // ─── State machine ────────────────────────────────────────────────
+    let faceState  = 'hidden';
+    let stateStart = performance.now();
 
+    const FORM_DUR    = 3.5;   // seconds: full formation
+    const DISSIPATE_DUR = 2.5; // seconds: full dissipation
+
+    // ─── Audio smoothing + jaw lag buffer ────────────────────────────
+    let mouthLevel = 0;
+    const audioBuf = new Float32Array(8);
+    let abIdx = 0;
+
+    // ─── Frame loop ───────────────────────────────────────────────────
     let lastTime = performance.now();
-    let lastState = '';
-    let lastConverse = null;
 
     function frame() {
       const now = performance.now();
-      const dt = Math.min(0.05, (now - lastTime) / 1000);
-      lastTime = now;
+      const dt  = Math.min(0.05, (now - lastTime) / 1000);
+      lastTime  = now;
+      const elapsed = (now - stateStart) / 1000;
 
-      // CONVERSE gate — crossfade face <-> orb on window.__converseActive.
+      // ── State transitions
       const converse = !!window.__converseActive;
-      if (converse !== lastConverse) {
-        faceCanvas.style.opacity = converse ? '1' : '0';
-        if (orbCanvas) orbCanvas.style.opacity = converse ? '0' : '1';
-        lastConverse = converse;
+
+      if (faceState === 'hidden' && converse) {
+        faceState = 'forming';
+        stateStart = now;
+        faceCanvas.style.opacity = '1';
+        if (orbCanvas) orbCanvas.style.opacity = '0';
+      } else if (faceState === 'forming' && elapsed > FORM_DUR) {
+        faceState = 'live';
+        stateStart = now;
+      } else if ((faceState === 'live' || faceState === 'forming') && !converse) {
+        faceState = 'dissipating';
+        stateStart = now;
+      } else if (faceState === 'dissipating' && elapsed > DISSIPATE_DUR) {
+        faceState = 'hidden';
+        stateStart = now;
+        faceCanvas.style.opacity = '0';
+        if (orbCanvas) orbCanvas.style.opacity = '1';
       }
 
-      const voice = window.__voiceLevel || 0;
-      const state = window.__orbState || 'idle';
+      // ── Voice smoothing + jaw lag
+      const rawVoice = window.__voiceLevel || 0;
+      // Attack 0.30, release 0.18
+      const k = rawVoice > mouthLevel ? 0.30 : 0.18;
+      mouthLevel += (rawVoice - mouthLevel) * k;
+      audioBuf[abIdx % 8] = mouthLevel;
+      abIdx++;
+      // jawLevel = mouthLevel from ~5 frames ago (~83ms at 60fps)
+      const jawLevel = audioBuf[(abIdx - 5 + 8) % 8];
 
-      if (state !== lastState) {
-        const palette = STATES[state] || STATES.idle;
-        targetColor.set(palette.primary);
-        lastState = state;
-      }
-      baseColor.lerp(targetColor, 0.08);
-
-      const speedMul =
-        state === 'speaking'  ? (1 + voice * 1.5) :
-        state === 'listening' ? 1.6 :
-        state === 'streaming' ? 1.3 :
-        state === 'creating'  ? 1.8 :
-        state === 'thinking'  ? 1.1 :
-        state === 'fault'     ? 0.5 : 1.0;
-
-      // ─── Main face layer ──────────────────────────────────────────
-      const ud = faceLayer.userData;
-      const aArr = ud.anchors, phArr = ud.phases, spArr = ud.speeds,
-            amArr = ud.amps, rArr = ud.roles, cArr = ud.colors, M = ud.count;
+      // ── Per-particle update
       const posArr = faceLayer.geometry.attributes.position.array;
       const colArr = faceLayer.geometry.attributes.color.array;
+      const sizeArr = faceLayer.geometry.attributes.aSize.array;
 
-      const baseR = baseColor.r, baseG = baseColor.g, baseB = baseColor.b;
+      for (let i = 0; i < COUNT; i++) {
+        const tx = targets[i].x, ty = targets[i].y, tz = targets[i].z;
+        const ox = origins[i * 3], oy = origins[i * 3 + 1], oz = origins[i * 3 + 2];
+        const role = roles[i];
+        const seed = seeds[i];
+        const phase = phases[i];
+        const bSize = baseSizes[i];
 
-      for (let k = 0; k < M; k++) {
-        // Advance per-particle drift phase; wrap at 1.0 → respawn at anchor.
-        phArr[k] += dt * spArr[k] * speedMul;
-        if (phArr[k] >= 1) phArr[k] -= 1;
-        const t = phArr[k];
+        let px = ox, py = oy, pz = oz;
+        let alpha = 0;
+        let sz    = bSize;
 
-        const ax = aArr[k * 3];
-        const ay = aArr[k * 3 + 1];
-        const az = aArr[k * 3 + 2];
+        if (faceState === 'forming') {
+          // Phase-stagger: each particle starts forming at slightly different time.
+          const startDelay = phase * 0.7;                                  // up to 0.7s desync
+          const formTotal  = FORM_DUR - 0.5;                               // each particle has ~3s to converge
+          const t0 = Math.max(0, (elapsed - startDelay) / formTotal);
+          const t  = Math.min(1, t0);
+          const eT = easeInOutCubic(t);
 
-        // Drift down by t * amplitude — Matrix stream.
-        const drift = t * amArr[k];
+          // Bezier-arc midpoint with perpendicular swirl
+          const swirl = 0.55 * (1 - eT);                                   // dies as we converge
+          const mx = (ox + tx) * 0.5 + Math.sin(elapsed * 1.8 + seed * 0.7) * swirl;
+          const my = (oy + ty) * 0.5 + Math.cos(elapsed * 1.6 + seed * 0.9) * swirl * 0.7;
+          const mz = (oz + tz) * 0.5 + Math.sin(elapsed * 2.1 + seed * 1.3) * swirl * 0.7;
 
-        // Per-role audio response.
-        let dy = 0, dz = 0;
-        switch (rArr[k]) {
-          case ROLE_UPLIP:   dy = voice * 0.06;  break;
-          case ROLE_LOWLIP:  dy = -voice * 0.10; break;
-          case ROLE_JAW:     dy = -voice * 0.05; break;
-          case ROLE_EYEBROW: dy = voice * 0.018; break;
-          case ROLE_NOSE:    dz = voice * 0.012; break;
+          let qx, qy, qz;
+          if (eT < 0.5) {
+            const u = eT * 2;
+            qx = ox + (mx - ox) * u;
+            qy = oy + (my - oy) * u;
+            qz = oz + (mz - oz) * u;
+          } else {
+            const u = (eT - 0.5) * 2;
+            qx = mx + (tx - mx) * u;
+            qy = my + (ty - my) * u;
+            qz = mz + (tz - mz) * u;
+          }
+
+          // Curl turbulence — strong early, gone by snap.
+          const turb = 0.35 * (1 - t * t);
+          const c = curlNoise(qx * 1.5, qy * 1.5, qz * 1.5, elapsed, seed);
+          px = qx + c.x * turb;
+          py = qy + c.y * turb;
+          pz = qz + c.z * turb;
+
+          // Alpha builds from 0 → 1 across the convergence; ripple pulse at snap.
+          alpha = t * t;
+
+          // Ripple wave: a brief size pulse when the particle finishes locking in
+          if (t > 0.92) {
+            const ripple = 1 + Math.sin((t - 0.92) / 0.08 * Math.PI) * 0.45;
+            sz = bSize * ripple;
+          }
+        }
+        else if (faceState === 'live') {
+          px = tx;
+          py = ty;
+          pz = tz;
+
+          // Subtle breathing — whole head pulses ~0.5% slow
+          const breath = 1 + Math.sin(now * 0.00085) * 0.006;
+          px *= breath; py *= breath; pz *= breath;
+
+          // Per-particle shimmer — barely perceptible, keeps the face "alive"
+          const shimmer = Math.sin(now * 0.0042 + seed) * 0.0035;
+          py += shimmer;
+
+          // ── Lip sync per role ─────────────────────────────────────
+          if (role === R_UPPER_LIP) {
+            py += mouthLevel * 0.026;
+          } else if (role === R_LOWER_LIP) {
+            py -= mouthLevel * 0.062;
+          } else if (role === R_MOUTH_INT) {
+            // mouth interior fades in as the mouth opens
+            alpha = 0;                                                     // start at 0, override below
+          } else if (role === R_JAW || role === R_CHIN) {
+            py -= jawLevel * 0.038;
+            pz -= jawLevel * 0.012;
+          } else if (role === R_CHEEK) {
+            py += Math.sin(now * 0.008 + seed * 3) * mouthLevel * 0.011;
+          } else if (role === R_BROW) {
+            py += mouthLevel * 0.009;                                      // micro brow lift
+          }
+
+          if (role === R_MOUTH_INT) {
+            alpha = mouthLevel * 0.95;
+          } else if (role === R_INNER_GLOW) {
+            alpha = 0.45 + mouthLevel * 0.25;
+          } else {
+            alpha = 1;
+          }
+
+          // Speaking pulses face size + ring color
+          if (role !== R_INNER_GLOW) {
+            sz = bSize * (1 + mouthLevel * 0.18);
+          }
+        }
+        else if (faceState === 'dissipating') {
+          const startDelay = phase * 0.5;
+          const dT = Math.max(0, Math.min(1, (elapsed - startDelay) / (DISSIPATE_DUR - 0.4)));
+
+          // Accelerating outward along escape direction
+          const speed = 1.4 + phase * 0.8;
+          const dist  = dT * dT * speed;
+          const exd = escapeDirs[i * 3], eyd = escapeDirs[i * 3 + 1], ezd = escapeDirs[i * 3 + 2];
+
+          let qx = tx + exd * dist;
+          let qy = ty + eyd * dist;
+          let qz = tz + ezd * dist;
+
+          // Light curl drift so they don't fly in straight lines
+          const c = curlNoise(qx, qy, qz, elapsed * 0.7, seed);
+          px = qx + c.x * dT * 0.35;
+          py = qy + c.y * dT * 0.35;
+          pz = qz + c.z * dT * 0.35;
+
+          alpha = Math.max(0, 1 - dT * 1.25);
+          sz    = bSize * (1 + dT * 0.6);                                  // puff out as they fade
+        }
+        else {
+          // hidden: park at origin, render nothing
+          px = ox; py = oy; pz = oz;
+          alpha = 0;
         }
 
-        // Soft x-jitter so the streams aren't perfectly vertical lines.
-        const jx = Math.sin((now * 0.001) * 0.6 + k * 0.13) * 0.0035;
+        posArr[i * 3]     = px;
+        posArr[i * 3 + 1] = py;
+        posArr[i * 3 + 2] = pz;
 
-        posArr[k * 3]     = ax + jx;
-        posArr[k * 3 + 1] = ay - drift + dy;
-        posArr[k * 3 + 2] = az + dz;
+        // Color multiplied by alpha (additive blend means 0 = invisible)
+        colArr[i * 3]     = baseColors[i * 3]     * alpha;
+        colArr[i * 3 + 1] = baseColors[i * 3 + 1] * alpha;
+        colArr[i * 3 + 2] = baseColors[i * 3 + 2] * alpha;
 
-        // Brightness — fade in at the top of the lane, fade out at the
-        // bottom. Plus a tiny per-particle shimmer (perlin-ish).
-        const lane = Math.sin(t * Math.PI);           // 0 at ends, 1 at middle
-        const shimmer = 0.85 + Math.sin(now * 0.004 + k * 0.7) * 0.15;
-        const brightness = lane * shimmer;
-
-        colArr[k * 3]     = baseR * brightness;
-        colArr[k * 3 + 1] = baseG * brightness;
-        colArr[k * 3 + 2] = baseB * brightness;
+        sizeArr[i] = sz;
       }
+
       faceLayer.geometry.attributes.position.needsUpdate = true;
       faceLayer.geometry.attributes.color.needsUpdate    = true;
-      faceLayer.material.size = 0.055 + (state === 'speaking' ? voice * 0.04 : 0);
+      faceLayer.geometry.attributes.aSize.needsUpdate    = true;
 
-      // ─── Mouth interior — opacity follows voice ───────────────────
-      const ud2 = interiorLayer.userData;
-      const aI = ud2.anchors, phI = ud2.phases, spI = ud2.speeds, amI = ud2.amps, cI = ud2.colors, NI = ud2.count;
-      const posI = interiorLayer.geometry.attributes.position.array;
-      const colI = interiorLayer.geometry.attributes.color.array;
-      for (let k = 0; k < NI; k++) {
-        phI[k] += dt * spI[k] * speedMul * (1 + voice * 0.8); // interior streams faster when speaking
-        if (phI[k] >= 1) phI[k] -= 1;
-        const t = phI[k];
-        const drift = t * amI[k];
-        posI[k * 3]     = aI[k * 3]     + Math.sin(now * 0.001 + k) * 0.003;
-        posI[k * 3 + 1] = aI[k * 3 + 1] - drift;
-        posI[k * 3 + 2] = aI[k * 3 + 2];
-        const lane = Math.sin(t * Math.PI);
-        colI[k * 3]     = baseR * 0.30 * lane;
-        colI[k * 3 + 1] = baseG * 0.45 * lane;
-        colI[k * 3 + 2] = baseB * 0.55 * lane;
+      // Head sway during live state — subtle, conveys "presence"
+      if (faceState === 'live') {
+        faceLayer.rotation.y = Math.sin(now * 0.00040) * 0.18;
+        faceLayer.rotation.x = Math.sin(now * 0.00028) * 0.06;
+      } else if (faceState === 'forming') {
+        // ease rotation in
+        const t = Math.min(1, elapsed / FORM_DUR);
+        faceLayer.rotation.y = Math.sin(now * 0.0006) * 0.12 * t;
+      } else {
+        faceLayer.rotation.y = 0;
+        faceLayer.rotation.x = 0;
       }
-      interiorLayer.geometry.attributes.position.needsUpdate = true;
-      interiorLayer.geometry.attributes.color.needsUpdate    = true;
-      const interiorTarget = state === 'speaking' ? voice * 0.75 : 0;
-      interiorLayer.material.opacity += (interiorTarget - interiorLayer.material.opacity) * 0.18;
 
-      // ─── Rings ────────────────────────────────────────────────────
+      // Rings — spin always, slightly faster when forming/live
+      const ringMul =
+        faceState === 'forming'     ? 1.6 :
+        faceState === 'live'        ? (1 + mouthLevel * 0.8) :
+        faceState === 'dissipating' ? 0.6 :
+        0.4;
       for (const ring of rings) {
-        ring.mesh.rotation.z += ring.rotSpeed * 0.01 * speedMul;
-        ring.mesh.rotation.y += ring.rotSpeed * 0.0035 * speedMul;
-        ring.material.color.lerp(targetColor, 0.04);
+        ring.mesh.rotation.z += ring.rotSpeed * 0.01 * ringMul;
+        ring.mesh.rotation.y += ring.rotSpeed * 0.0035 * ringMul;
+        // Rings fade with the face
+        const ringTarget =
+          faceState === 'hidden'      ? 0 :
+          faceState === 'forming'     ? Math.min(1, elapsed / 1.0) :
+          faceState === 'dissipating' ? Math.max(0, 1 - elapsed / DISSIPATE_DUR) :
+          1;
+        ring.material.opacity += (ring.baseOpacity * ringTarget - ring.material.opacity) * 0.10;
       }
-
-      // ─── Head sway ────────────────────────────────────────────────
-      const swayY = Math.sin(now * 0.0003 * speedMul) * 0.20;
-      const swayX = Math.sin(now * 0.00022 * speedMul) * 0.07;
-      faceLayer.rotation.y     = swayY; faceLayer.rotation.x     = swayX;
-      interiorLayer.rotation.y = swayY; interiorLayer.rotation.x = swayX;
 
       renderer.render(scene, camera);
       requestAnimationFrame(frame);
@@ -531,9 +858,7 @@
 
     requestAnimationFrame(frame);
     resize();
-    console.log('[face] v6 CONVERSE-gated talking-head — face=' + faceLayer.userData.count +
-                ', interior=' + interiorLayer.userData.count +
-                ', rings=' + (rings.length * 260));
+    console.log('[face v7] cinematic ready — count=' + COUNT + ', mobile=' + isMobile);
   }
 
   function waitForThreeAndInit() {
@@ -542,10 +867,10 @@
       attempts++;
       if (window.THREE) {
         clearInterval(interval);
-        try { tryInit(); } catch (e) { console.warn('[face] init threw:', e.message); }
+        try { tryInit(); } catch (e) { console.warn('[face v7] init threw:', e.message); }
       } else if (attempts > 30) {
         clearInterval(interval);
-        console.warn('[face] Three.js never appeared after 3s — keeping canvas orb');
+        console.warn('[face v7] Three.js never appeared after 3s — keeping canvas orb');
       }
     }, 100);
   }
