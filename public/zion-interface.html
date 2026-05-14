@@ -866,7 +866,24 @@
 
         const pc = new RTCPeerConnection();
         const audioEl = $('converseAudio');
-        pc.ontrack = (e) => { audioEl.srcObject = e.streams[0]; setOrbState('speaking'); };
+        let converseTap = null; // { source, ctx }
+        pc.ontrack = (e) => {
+          audioEl.srcObject = e.streams[0];
+          setOrbState('speaking');
+          // Tap the live audio stream into the analyser so window.__voiceLevel
+          // tracks Zion's speech during CONVERSE — the orb pulse and the
+          // particle face both read this signal.
+          try {
+            const ctxA = getAudioCtx();
+            if (ctxA.state === 'suspended') ctxA.resume();
+            const tap = ctxA.createMediaStreamSource(e.streams[0]);
+            tap.connect(analyser);
+            if (!rafId) rafId = requestAnimationFrame(tickFromAudio);
+            converseTap = { source: tap, ctx: ctxA };
+          } catch (err) {
+            console.warn('[converse] analyser tap failed:', err);
+          }
+        };
 
         const micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
         for (const t of micStream.getTracks()) pc.addTrack(t, micStream);
@@ -886,7 +903,7 @@
         const answerSdp = await sdpRes.text();
         await pc.setRemoteDescription({ type: 'answer', sdp: answerSdp });
 
-        converseSession = { pc, dc, audioEl, micStream };
+        converseSession = { pc, dc, audioEl, micStream, getTap: () => converseTap };
         converseActive = true;
         window.__converseActive = true;
         btn.classList.add('active');
@@ -908,9 +925,15 @@
 
     function closeConverse() {
       if (!converseSession) return;
+      try {
+        const tap = converseSession.getTap && converseSession.getTap();
+        if (tap && tap.source) tap.source.disconnect();
+      } catch (_) {}
       try { converseSession.pc.close(); } catch (_) {}
       try { converseSession.micStream.getTracks().forEach(t => t.stop()); } catch (_) {}
       try { converseSession.audioEl.srcObject = null; } catch (_) {}
+      if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
+      window.__voiceLevel = 0;
       converseSession = null;
       converseActive = false;
       window.__converseActive = false;
