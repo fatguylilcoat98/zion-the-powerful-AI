@@ -1,0 +1,49 @@
+# Zion — The Powerful AI · Tiffani's Personal Companion
+# PR 1: Web service only. Cron workers (reflection / memory-decay /
+# memory-compression) land in PR 2 with the consciousness layer.
+
+services:
+  - type: web
+    name: zion
+    env: node
+    plan: starter
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_KEY
+        sync: false
+      - key: SUPABASE_JWT_SECRET
+        sync: false
+      - key: TAVILY_API_KEY
+        sync: false
+      - key: ZION_OWNER_EMAIL
+        sync: false
+      - key: ZION_OWNER_TIMEZONE
+        value: America/Los_Angeles
+      - key: PINECONE_API_KEY
+        sync: false
+      - key: PINECONE_INDEX
+        value: zion-memory
+      - key: ELEVENLABS_API_KEY
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: PERPLEXITY_API_KEY
+        sync: false
+      - key: CLASPION_ENABLED
+        value: "false"
+      - key: CLASPION_FAIL_MODE
+        value: block
+      - key: CLASPION_ACTOR_ID
+        value: zion
