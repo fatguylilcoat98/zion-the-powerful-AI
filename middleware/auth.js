@@ -1,6 +1,7 @@
 /*
   Zion — Authentication middleware.
-  Cloned from Splendor; SPLENDOR_OWNER_EMAIL renamed to ZION_OWNER_EMAIL.
+  Two-user allowlist: ZION_OWNER_EMAIL (Tiff) + ZION_ADMIN_EMAIL (Chris).
+  Either email satisfies requireOwner. Email comparison is case-insensitive.
 */
 
 const { createClient } = require('@supabase/supabase-js');
@@ -35,21 +36,35 @@ async function requireAuth(req, res, next) {
   }
 }
 
-function requireOwner(req, res, next) {
-  const OWNER_EMAIL = process.env.ZION_OWNER_EMAIL;
+function allowedEmails() {
+  const owner = (process.env.ZION_OWNER_EMAIL || '').trim().toLowerCase();
+  const admin = (process.env.ZION_ADMIN_EMAIL || '').trim().toLowerCase();
+  return [owner, admin].filter(Boolean);
+}
 
-  if (!OWNER_EMAIL) {
+function requireOwner(req, res, next) {
+  const allowlist = allowedEmails();
+
+  if (allowlist.length === 0) {
     return res.status(500).json({
       error: 'Server configuration error',
-      message: 'Owner email not configured'
+      message: 'No allowed emails configured (set ZION_OWNER_EMAIL and/or ZION_ADMIN_EMAIL)'
     });
   }
 
-  if (!req.user || req.user.email !== OWNER_EMAIL) {
+  const userEmail = (req.user && req.user.email ? req.user.email : '').toLowerCase();
+  if (!userEmail || !allowlist.includes(userEmail)) {
     return res.status(403).json({
       error: 'Access denied',
-      message: 'This system is restricted to the owner only'
+      message: 'This system is restricted to authorized users only'
     });
+  }
+
+  // Tag the role on the request so downstream handlers can branch if needed.
+  if (userEmail === (process.env.ZION_OWNER_EMAIL || '').trim().toLowerCase()) {
+    req.userRole = 'owner';
+  } else {
+    req.userRole = 'admin';
   }
 
   next();
@@ -85,5 +100,6 @@ function rateLimit(maxRequests = 100, windowMs = 60000) {
 module.exports = {
   requireAuth,
   requireOwner,
-  rateLimit
+  rateLimit,
+  allowedEmails
 };

@@ -11,9 +11,8 @@ const path = require('path');
 const fs = require('fs');
 require('dotenv').config();
 
-// Cached HTML with Supabase config injected at startup.
-// Mirrors Splendor's __SUPABASE_URL__ / __SUPABASE_ANON_KEY__ pattern
-// so the browser bundle reads config without a runtime call.
+const { seedConfiguredUsers, summarizeResults } = require('./lib/seed-users');
+
 let cachedZionHtml = null;
 
 function loadZionHtml() {
@@ -45,8 +44,6 @@ app.use(helmet({
   contentSecurityPolicy: {
     directives: {
       defaultSrc: ["'self'"],
-      // 'unsafe-inline' for the page's inline orb/chat/voice wiring;
-      // cdn.jsdelivr.net so the @supabase/supabase-js UMD bundle loads.
       scriptSrc: ["'self'", "'unsafe-inline'", "https://cdn.jsdelivr.net"],
       styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
       fontSrc: ["'self'", "https://fonts.gstatic.com"],
@@ -65,9 +62,6 @@ app.use(cors({
 }));
 
 app.use(express.json({ limit: '10mb' }));
-// `index: false` so express.static doesn't auto-serve any leftover
-// index.html for `GET /`. The catch-all `app.get('*')` below owns
-// the HTML response and serves the template-substituted Zion UI.
 app.use(express.static('public', { index: false }));
 
 app.use('/api/auth', authRoutes);
@@ -88,6 +82,10 @@ app.get('/health', (req, res) => {
       supabase: !!(process.env.SUPABASE_URL && process.env.SUPABASE_ANON_KEY),
       tavily: !!process.env.TAVILY_API_KEY
     },
+    auth: {
+      owner_configured: !!process.env.ZION_OWNER_EMAIL,
+      admin_configured: !!process.env.ZION_ADMIN_EMAIL
+    },
     timestamp: new Date().toISOString()
   });
 });
@@ -101,7 +99,6 @@ app.get('/version', (req, res) => {
   });
 });
 
-// Zion interface is the only UI surface.
 app.get('*', (req, res) => {
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   res.send(cachedZionHtml);
@@ -123,12 +120,25 @@ function logSystemStatus() {
   console.log(`  Supabase:   ${process.env.SUPABASE_URL && process.env.SUPABASE_ANON_KEY ? 'connected' : 'MISSING'}`);
   console.log(`  Tavily:     ${process.env.TAVILY_API_KEY ? 'connected' : 'disabled (legal search unavailable)'}`);
   console.log(`\nOwner timezone: ${process.env.ZION_OWNER_TIMEZONE || 'America/Los_Angeles'}`);
+  console.log(`Allowed users:  ${[process.env.ZION_OWNER_EMAIL, process.env.ZION_ADMIN_EMAIL].filter(Boolean).join(', ') || '(none configured!)'}`);
   console.log(`Port:           ${PORT}`);
   console.log(`Environment:    ${process.env.NODE_ENV || 'development'}`);
   console.log('='.repeat(60) + '\n');
 }
 
-app.listen(PORT, () => {
+app.listen(PORT, async () => {
   logSystemStatus();
   console.log(`Zion is running on port ${PORT}`);
+
+  // Auto-seed Supabase Auth users from environment so Tiff and Chris
+  // can sign in immediately on first boot, no dashboard work required.
+  // Idempotent: re-running just resyncs passwords if env values change.
+  try {
+    const results = await seedConfiguredUsers();
+    console.log('\nUser seeding:');
+    console.log(summarizeResults(results));
+    console.log('');
+  } catch (err) {
+    console.error('[seed-users] unexpected error:', err.message);
+  }
 });
