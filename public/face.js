@@ -244,10 +244,12 @@
         // then project through the breath-scaled (sX, sY) at draw time.
         // Stash image-space positions; pass 2 projects them.
         const imgHinv = 1 / imgH;
-        // Lip/mouth band center (y_norm). Bbox runs from crown (y_norm=0)
-        // to just under the chin (y_norm=1.0). Lips sit around 0.69.
-        const LIP_Y = 0.69;
-        const LIP_HALF = 0.10;  // half-width of the lip band, in y_norm
+        // Lip/mouth band center (y_norm). Bbox now runs crown -> chin only
+        // (no neck shadow). Lips sit around 0.73 in the trimmed bbox.
+        const LIP_Y = 0.73;
+        const LIP_HALF = 0.09;  // half-width of the lip band, in y_norm
+        const JAW_START = 0.55; // y_norm where jaw drop ramp starts (below nose)
+        const JAW_SPAN  = 1.0 - JAW_START;
         for (let i = 0; i < n; i++) {
           // Idle breathing — every dot, voice-independent
           const idleDx = idleAmp * Math.sin(orbPhase + phA[i]);
@@ -255,18 +257,19 @@
 
           const yNorm = ys[i] * imgHinv;
 
-          // Jaw drop — linear ramp from 0 at y_norm 0.5 to 1 at chin.
+          // Jaw drop — ramp from 0 at JAW_START up to 1 at the chin.
           // Voice-scaled. The lower the dot, the more it drops, like a
           // jaw rotating around the temporomandibular axis.
-          const jawIntensity = yNorm > 0.5 ? (yNorm - 0.5) * 2 : 0; // 0..1
+          const jawIntensity = yNorm > JAW_START ? (yNorm - JAW_START) / JAW_SPAN : 0;
           const jawDrop = voice * 22 * jawIntensity;
 
-          // Lip split — narrow band centered on the lips. Dots above the
-          // lip center lift up, dots below push down. Makes the mouth
-          // visibly part with voice.
+          // Lip split — smooth sin-shaped displacement across the band.
+          // No abrupt crossover at the center (which read as a sharp line);
+          // instead dots near the center barely move, mid-band displaces
+          // most, edges return to zero — like the soft motion of parting lips.
           const lipDist = yNorm - LIP_Y;
           const lipKernel = Math.max(0, 1 - Math.abs(lipDist) / LIP_HALF);
-          const lipSplit = voice * 7 * lipKernel * (lipDist >= 0 ? 1 : -1);
+          const lipSplit = voice * 7 * lipKernel * Math.sin(lipDist * Math.PI / LIP_HALF);
 
           // Phoneme shimmer — fast wobble, scoped to the lower face so the
           // upper face stays still. Drives the per-syllable detail.
