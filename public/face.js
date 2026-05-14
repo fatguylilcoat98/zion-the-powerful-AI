@@ -1,20 +1,27 @@
 /*
-  Zion — Particle Face.
+  Zion — Particle Face v2 (luminous).
 
-  Three.js Points geometry, ~3200 particles, arranged into a stylized
-  humanoid face: head outline, eyes, nose, mouth, scattered cheek/
-  forehead interior. The mouth region is tagged audio-reactive and
-  displaces vertically with window.__voiceLevel — Zion's speech
-  literally moves her mouth.
+  Splendor's orb reads as *beautiful* because it has depth: a hot
+  glowing core, concentric tilted orbital rings, an ambient halo.
+  This pass layers that cosmic structure around the face so Zion
+  reads as luminous, not pixelly.
 
-  Reads state from window.__orbState (string) and color from
-  window.__STATE_COLORS (object). Same state machine the canvas-2D
-  orb uses, so all the existing setOrbState() calls just work.
+  Layers (each is a Three.js Points object):
+    1. Core glow     — one giant white-hot sprite at origin
+    2. Face          — ~3200 particles in head/eyes/nose/mouth shape
+    3. Orbital rings — 3 tilted ellipse rings, each rotating at its
+                       own rate (matches Splendor's orbital trails)
+    4. Nebula        — ~800 scattered particles forming an ambient
+                       halo cloud around the whole thing
 
-  Fail-safe: if Three.js never loads (CDN blocked / network error) or
-  WebGL init throws, this module logs the failure, returns, and the
-  canvas-2D orb in zion-interface.html stays visible. We never crash
-  the demo for the sake of a stretch goal.
+  All layers respond to the state machine:
+    - Color lerps to the active state's primary teal/cyan/gold/red
+    - Speaking → mouth particles displace with window.__voiceLevel
+    - Speed multiplier per state affects ring rotation + breathing
+
+  Fail-safe behavior is unchanged from v1: if Three.js never loads,
+  if WebGL is unavailable, or if any init step throws, this module
+  returns silently and the canvas-2D orb keeps drawing.
 */
 
 (function () {
@@ -22,174 +29,238 @@
 
   function tryInit() {
     if (typeof window === 'undefined' || typeof document === 'undefined') return;
-    if (!window.THREE) {
-      console.warn('[face] Three.js not loaded — keeping canvas orb');
-      return;
-    }
+    if (!window.THREE) { console.warn('[face] Three.js not loaded — keeping canvas orb'); return; }
 
-    const PARTICLE_COUNT = 3200;
-    const orbCanvas = document.getElementById('orbCanvas');
+    const FACE_COUNT   = 3200;
+    const NEBULA_COUNT = 800;
+    const RING_COUNT   = 500; // per ring × 3 rings = 1500
+
+    const orbCanvas    = document.getElementById('orbCanvas');
     const neuralCenter = document.querySelector('.neural-center');
-    if (!neuralCenter) {
-      console.warn('[face] neural-center container missing');
-      return;
-    }
+    if (!neuralCenter) { console.warn('[face] neural-center missing'); return; }
 
-    // Probe WebGL before committing. If the probe canvas can't get a
-    // context, bail and leave the 2D orb visible.
     const probe = document.createElement('canvas');
     const gl = probe.getContext('webgl') || probe.getContext('experimental-webgl');
-    if (!gl) {
-      console.warn('[face] WebGL not available — keeping canvas orb');
-      return;
+    if (!gl) { console.warn('[face] WebGL not available — keeping canvas orb'); return; }
+
+    // ───────────────────────────────────────────────────────────────
+    // Soft glow sprite — big radial gradient texture. Each particle
+    // wears this as a halo when rendered with AdditiveBlending, so
+    // overlapping particles bloom into one another instead of
+    // looking like a constellation of dots.
+    // ───────────────────────────────────────────────────────────────
+    function makeSprite(falloff) {
+      const c = document.createElement('canvas');
+      c.width = c.height = 128;
+      const sctx = c.getContext('2d');
+      const g = sctx.createRadialGradient(64, 64, 0, 64, 64, 64);
+      g.addColorStop(0,    'rgba(255,255,255,1)');
+      g.addColorStop(0.18, 'rgba(255,255,255,' + (0.75 * falloff) + ')');
+      g.addColorStop(0.45, 'rgba(255,255,255,' + (0.30 * falloff) + ')');
+      g.addColorStop(1,    'rgba(255,255,255,0)');
+      sctx.fillStyle = g;
+      sctx.fillRect(0, 0, 128, 128);
+      return new THREE.CanvasTexture(c);
     }
 
-    // Build the face. All coordinates normalized to roughly [-1, 1].
-    const positions = new Float32Array(PARTICLE_COUNT * 3);
-    const anchors = new Float32Array(PARTICLE_COUNT * 3);
-    const phases = new Float32Array(PARTICLE_COUNT);
-    const isMouth = new Uint8Array(PARTICLE_COUNT);
+    // ───────────────────────────────────────────────────────────────
+    // Face anchors — same layout as v1 (head outline, eyes, nose,
+    // mouth, scattered fill). Mouth particles are tagged audio-reactive.
+    // ───────────────────────────────────────────────────────────────
+    const facePositions = new Float32Array(FACE_COUNT * 3);
+    const faceAnchors   = new Float32Array(FACE_COUNT * 3);
+    const facePhases    = new Float32Array(FACE_COUNT);
+    const isMouth       = new Uint8Array(FACE_COUNT);
 
-    let i = 0;
-    function setAnchor(x, y, z, mouth) {
-      if (i >= PARTICLE_COUNT) return;
-      anchors[i * 3]     = x;
-      anchors[i * 3 + 1] = y;
-      anchors[i * 3 + 2] = z;
-      phases[i] = Math.random() * Math.PI * 2;
-      isMouth[i] = mouth ? 1 : 0;
-      // Start scattered so the face assembles in over the first second.
-      positions[i * 3]     = (Math.random() - 0.5) * 2.4;
-      positions[i * 3 + 1] = (Math.random() - 0.5) * 2.4;
-      positions[i * 3 + 2] = (Math.random() - 0.5) * 0.6;
-      i++;
+    let fi = 0;
+    function pushFace(x, y, z, mouth) {
+      if (fi >= FACE_COUNT) return;
+      faceAnchors[fi * 3]     = x;
+      faceAnchors[fi * 3 + 1] = y;
+      faceAnchors[fi * 3 + 2] = z;
+      facePhases[fi]          = Math.random() * Math.PI * 2;
+      isMouth[fi]             = mouth ? 1 : 0;
+      facePositions[fi * 3]     = (Math.random() - 0.5) * 2.4;
+      facePositions[fi * 3 + 1] = (Math.random() - 0.5) * 2.4;
+      facePositions[fi * 3 + 2] = (Math.random() - 0.5) * 0.6;
+      fi++;
     }
 
-    // 1) Head outline — ellipse, dense ring
-    const headOutline = Math.floor(PARTICLE_COUNT * 0.22);
+    // Head outline (22%)
+    const headOutline = Math.floor(FACE_COUNT * 0.22);
     for (let k = 0; k < headOutline; k++) {
       const a = (k / headOutline) * Math.PI * 2;
       const rx = 0.68 + (Math.random() - 0.5) * 0.03;
       const ry = 0.92 + (Math.random() - 0.5) * 0.03;
-      setAnchor(Math.cos(a) * rx, Math.sin(a) * ry - 0.05, 0, false);
+      pushFace(Math.cos(a) * rx, Math.sin(a) * ry - 0.05, 0, false);
     }
-
-    // 2) Jaw — slight V at the bottom for face shape
-    const jawCount = Math.floor(PARTICLE_COUNT * 0.05);
+    // Jaw V (5%)
+    const jawCount = Math.floor(FACE_COUNT * 0.05);
     for (let k = 0; k < jawCount; k++) {
-      const t = (k / jawCount) * 2 - 1; // -1..1
-      const x = t * 0.55;
-      const y = -0.85 + Math.abs(t) * 0.15;
-      setAnchor(x + (Math.random() - 0.5) * 0.04, y + (Math.random() - 0.5) * 0.03, 0, false);
+      const t = (k / jawCount) * 2 - 1;
+      pushFace(t * 0.55 + (Math.random() - 0.5) * 0.04, -0.85 + Math.abs(t) * 0.15 + (Math.random() - 0.5) * 0.03, 0, false);
     }
-
-    // 3) Left eye — small cluster
-    const eyeCount = Math.floor(PARTICLE_COUNT * 0.06);
+    // Eyes (12% combined)
+    const eyeCount = Math.floor(FACE_COUNT * 0.06);
     for (let k = 0; k < eyeCount; k++) {
       const a = Math.random() * Math.PI * 2;
       const r = Math.random() * 0.09;
-      setAnchor(-0.27 + Math.cos(a) * r * 1.3, 0.22 + Math.sin(a) * r * 0.7, 0.02, false);
+      pushFace(-0.27 + Math.cos(a) * r * 1.3, 0.22 + Math.sin(a) * r * 0.7, 0.02, false);
     }
-    // Right eye
     for (let k = 0; k < eyeCount; k++) {
       const a = Math.random() * Math.PI * 2;
       const r = Math.random() * 0.09;
-      setAnchor(0.27 + Math.cos(a) * r * 1.3, 0.22 + Math.sin(a) * r * 0.7, 0.02, false);
+      pushFace(0.27 + Math.cos(a) * r * 1.3, 0.22 + Math.sin(a) * r * 0.7, 0.02, false);
     }
-
-    // 4) Nose — vertical line cluster
-    const noseCount = Math.floor(PARTICLE_COUNT * 0.05);
+    // Nose (5%)
+    const noseCount = Math.floor(FACE_COUNT * 0.05);
     for (let k = 0; k < noseCount; k++) {
       const t = k / noseCount;
-      setAnchor(
-        (Math.random() - 0.5) * 0.10,
-        0.05 - t * 0.30,
-        0.03,
-        false
-      );
+      pushFace((Math.random() - 0.5) * 0.10, 0.05 - t * 0.30, 0.03, false);
     }
-
-    // 5) Mouth — horizontal cluster, AUDIO-REACTIVE
-    const mouthCount = Math.floor(PARTICLE_COUNT * 0.10);
+    // Mouth (10%) — AUDIO-REACTIVE
+    const mouthCount = Math.floor(FACE_COUNT * 0.10);
     for (let k = 0; k < mouthCount; k++) {
       const t = (k / mouthCount) * 2 - 1;
-      const x = t * 0.32;
-      const y = -0.42 + (Math.random() - 0.5) * 0.05;
-      setAnchor(x, y, 0.02, true);
+      pushFace(t * 0.32, -0.42 + (Math.random() - 0.5) * 0.05, 0.02, true);
     }
-
-    // 6) Forehead + cheeks — scattered interior fill
-    while (i < PARTICLE_COUNT) {
+    // Forehead + cheek fill (the rest)
+    while (fi < FACE_COUNT) {
       const a = Math.random() * Math.PI * 2;
       const r = Math.sqrt(Math.random()) * 0.55;
       const x = Math.cos(a) * r * 0.78;
       const y = Math.sin(a) * r * 0.95 - 0.05;
-      // Skip if too close to eye / mouth zones — keep them readable
       const inLeftEye  = Math.hypot(x + 0.27, y - 0.22) < 0.13;
       const inRightEye = Math.hypot(x - 0.27, y - 0.22) < 0.13;
       const inMouth    = Math.hypot(x, y + 0.42) < 0.10 && Math.abs(y + 0.42) < 0.08;
       if (inLeftEye || inRightEye || inMouth) continue;
-      setAnchor(x, y, (Math.random() - 0.5) * 0.08, false);
+      // Slight convex z — fills out depth so the face isn't pancake-flat.
+      const z = 0.18 * Math.exp(-(x * x + y * y) * 2.2);
+      pushFace(x, y, z + (Math.random() - 0.5) * 0.04, false);
     }
 
-    // Three.js setup
-    let scene, camera, renderer, particles, material;
+    // ───────────────────────────────────────────────────────────────
+    // Three.js scene + layers
+    // ───────────────────────────────────────────────────────────────
+    let scene, camera, renderer, faceCanvas;
+    let faceLayer, coreLayer, nebulaLayer;
+    const rings = []; // { mesh, material, rotSpeed }
+
     try {
       scene = new THREE.Scene();
       const aspect = neuralCenter.clientWidth / neuralCenter.clientHeight || 1;
       camera = new THREE.PerspectiveCamera(50, aspect, 0.1, 100);
-      camera.position.set(0, 0, 2.4);
+      camera.position.set(0, 0, 2.6);
       camera.lookAt(0, 0, 0);
 
-      // Create a dedicated canvas overlaying #orbCanvas. We don't reuse
-      // #orbCanvas because the 2D context already lives there — once a
-      // canvas commits to 2D it can't switch to WebGL on the same element.
-      const faceCanvas = document.createElement('canvas');
+      faceCanvas = document.createElement('canvas');
       faceCanvas.id = 'faceCanvas';
       faceCanvas.style.cssText = 'position:absolute; inset:0; width:100%; height:100%; display:block; pointer-events:none;';
       neuralCenter.appendChild(faceCanvas);
 
       renderer = new THREE.WebGLRenderer({ canvas: faceCanvas, alpha: true, antialias: true });
-      renderer.setPixelRatio(window.devicePixelRatio || 1);
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
       renderer.setSize(neuralCenter.clientWidth, neuralCenter.clientHeight, false);
       renderer.setClearColor(0x000000, 0);
 
-      const geometry = new THREE.BufferGeometry();
-      geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+      const softSprite   = makeSprite(1.0);
+      const ringSprite   = makeSprite(0.85);
+      const coreSprite   = makeSprite(1.0);
+      const nebulaSprite = makeSprite(0.55);
 
-      // Soft glow sprite for each particle. A radial-gradient canvas
-      // texture reads as a halo at small sizes — much warmer than the
-      // default square Points dots.
-      const spriteCanvas = document.createElement('canvas');
-      spriteCanvas.width = spriteCanvas.height = 64;
-      const sctx = spriteCanvas.getContext('2d');
-      const grad = sctx.createRadialGradient(32, 32, 0, 32, 32, 32);
-      grad.addColorStop(0,    'rgba(255,255,255,1)');
-      grad.addColorStop(0.4,  'rgba(255,255,255,0.55)');
-      grad.addColorStop(1,    'rgba(255,255,255,0)');
-      sctx.fillStyle = grad;
-      sctx.fillRect(0, 0, 64, 64);
-      const sprite = new THREE.CanvasTexture(spriteCanvas);
-
-      material = new THREE.PointsMaterial({
-        size: 0.045,
-        color: 0x4FB8C9, // idle teal; updated each frame from STATE_COLORS
-        map: sprite,
+      // ─── Core glow — one giant white-hot particle at origin
+      const coreGeom = new THREE.BufferGeometry();
+      coreGeom.setAttribute('position', new THREE.BufferAttribute(new Float32Array([0, -0.05, -0.05]), 3));
+      const coreMat = new THREE.PointsMaterial({
+        size: 1.4,
+        color: 0xE0FFFF,
+        map: coreSprite,
         transparent: true,
-        opacity: 0.92,
+        opacity: 0.55,
         depthWrite: false,
         blending: THREE.AdditiveBlending,
       });
+      coreLayer = new THREE.Points(coreGeom, coreMat);
+      scene.add(coreLayer);
 
-      particles = new THREE.Points(geometry, material);
-      scene.add(particles);
+      // ─── Face — main particles, bigger soft sprites
+      const faceGeom = new THREE.BufferGeometry();
+      faceGeom.setAttribute('position', new THREE.BufferAttribute(facePositions, 3));
+      const faceMat = new THREE.PointsMaterial({
+        size: 0.085,
+        color: 0x4FB8C9,
+        map: softSprite,
+        transparent: true,
+        opacity: 0.95,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+      });
+      faceLayer = new THREE.Points(faceGeom, faceMat);
+      scene.add(faceLayer);
+
+      // ─── Orbital rings — 3 tilted ellipses around the face
+      const ringSpecs = [
+        { rx: 1.05, ry: 0.95, tilt: [ 0.28,  0.10,  0.00], speed:  0.28, color: 0x00E5FF, opacity: 0.75 },
+        { rx: 1.22, ry: 1.10, tilt: [-0.20,  0.00,  0.45], speed: -0.22, color: 0x00BFC4, opacity: 0.65 },
+        { rx: 1.40, ry: 1.28, tilt: [ 0.15, -0.30,  0.10], speed:  0.17, color: 0x9eeaff, opacity: 0.55 },
+      ];
+      ringSpecs.forEach((spec) => {
+        const pos = new Float32Array(RING_COUNT * 3);
+        for (let k = 0; k < RING_COUNT; k++) {
+          const a = (k / RING_COUNT) * Math.PI * 2 + (Math.random() - 0.5) * 0.04;
+          pos[k * 3]     = Math.cos(a) * spec.rx + (Math.random() - 0.5) * 0.04;
+          pos[k * 3 + 1] = Math.sin(a) * spec.ry + (Math.random() - 0.5) * 0.04;
+          pos[k * 3 + 2] = (Math.random() - 0.5) * 0.04;
+        }
+        const ringGeom = new THREE.BufferGeometry();
+        ringGeom.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+        const ringMat = new THREE.PointsMaterial({
+          size: 0.055,
+          color: spec.color,
+          map: ringSprite,
+          transparent: true,
+          opacity: spec.opacity,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+        });
+        const mesh = new THREE.Points(ringGeom, ringMat);
+        mesh.rotation.x = spec.tilt[0];
+        mesh.rotation.y = spec.tilt[1];
+        mesh.rotation.z = spec.tilt[2];
+        scene.add(mesh);
+        rings.push({ mesh, material: ringMat, rotSpeed: spec.speed });
+      });
+
+      // ─── Nebula — scattered ambient halo around the face
+      const nebPos = new Float32Array(NEBULA_COUNT * 3);
+      for (let k = 0; k < NEBULA_COUNT; k++) {
+        const u = Math.random();
+        const radius = 0.9 + Math.sqrt(u) * 0.95;
+        const theta = Math.random() * Math.PI * 2;
+        const phi = Math.acos(2 * Math.random() - 1);
+        nebPos[k * 3]     = Math.sin(phi) * Math.cos(theta) * radius;
+        nebPos[k * 3 + 1] = Math.cos(phi) * radius * 0.9;
+        nebPos[k * 3 + 2] = Math.sin(phi) * Math.sin(theta) * radius * 0.6;
+      }
+      const nebGeom = new THREE.BufferGeometry();
+      nebGeom.setAttribute('position', new THREE.BufferAttribute(nebPos, 3));
+      const nebMat = new THREE.PointsMaterial({
+        size: 0.10,
+        color: 0x4FB8C9,
+        map: nebulaSprite,
+        transparent: true,
+        opacity: 0.35,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+      });
+      nebulaLayer = new THREE.Points(nebGeom, nebMat);
+      scene.add(nebulaLayer);
     } catch (err) {
       console.warn('[face] init failed, keeping canvas orb:', err.message);
+      if (faceCanvas && faceCanvas.parentNode) faceCanvas.parentNode.removeChild(faceCanvas);
       return;
     }
 
-    // Once Three.js is up and running, hide the canvas-2D orb so the
-    // two animations don't fight visually.
     if (orbCanvas) orbCanvas.style.visibility = 'hidden';
 
     function resize() {
@@ -210,8 +281,11 @@
       creating:  { primary: '#FFD166' },
       fault:     { primary: '#FF5C5C' },
     };
-    const lerpedColor = new THREE.Color(STATES.idle.primary);
-    const targetColor = new THREE.Color(STATES.idle.primary);
+    const faceLerped   = new THREE.Color(STATES.idle.primary);
+    const faceTarget   = new THREE.Color(STATES.idle.primary);
+    const nebulaLerped = new THREE.Color(STATES.idle.primary);
+    const nebulaTarget = new THREE.Color(STATES.idle.primary);
+    const coreWhite    = new THREE.Color(0xE0FFFF);
 
     const t0 = performance.now();
     let lastState = '';
@@ -221,19 +295,17 @@
       const voice = window.__voiceLevel || 0;
       const state = window.__orbState || 'idle';
 
-      // Update target color when state changes; lerp toward it each frame.
       if (state !== lastState) {
         const palette = STATES[state] || STATES.idle;
-        targetColor.set(palette.primary);
+        faceTarget.set(palette.primary);
+        nebulaTarget.set(palette.primary);
         lastState = state;
       }
-      lerpedColor.lerp(targetColor, 0.08);
-      material.color.copy(lerpedColor);
+      faceLerped.lerp(faceTarget, 0.08);
+      nebulaLerped.lerp(nebulaTarget, 0.05);
+      faceLayer.material.color.copy(faceLerped);
+      nebulaLayer.material.color.copy(nebulaLerped);
 
-      const posArr = particles.geometry.attributes.position.array;
-      const assemble = Math.min(1, time / 1.4); // assemble face over 1.4s
-
-      // Speed multiplier per state (matches canvas orb's feel)
       const speedMul =
         state === 'speaking'  ? (1 + voice * 1.5) :
         state === 'listening' ? 1.6 :
@@ -242,27 +314,20 @@
         state === 'thinking'  ? 1.1 :
         state === 'fault'     ? 0.5 : 1.0;
 
-      // Per-particle micro-motion + audio-reactive mouth.
-      for (let k = 0; k < PARTICLE_COUNT; k++) {
-        const ax = anchors[k * 3];
-        const ay = anchors[k * 3 + 1];
-        const az = anchors[k * 3 + 2];
-        const ph = phases[k];
+      const posArr = faceLayer.geometry.attributes.position.array;
+      const assemble = Math.min(1, time / 1.4);
+      for (let k = 0; k < FACE_COUNT; k++) {
+        const ax = faceAnchors[k * 3];
+        const ay = faceAnchors[k * 3 + 1];
+        const az = faceAnchors[k * 3 + 2];
+        const ph = facePhases[k];
 
-        // Idle jitter — small drift, individual phase
         const jx = Math.sin(time * 0.6 * speedMul + ph) * 0.006;
         const jy = Math.cos(time * 0.8 * speedMul + ph * 1.3) * 0.006;
         const jz = Math.sin(time * 0.5 * speedMul + ph * 0.7) * 0.012;
+        const mouthY = isMouth[k] ? Math.sin(time * 8 + ph) * voice * 0.10 : 0;
+        const breath = 1 + Math.sin(time * 1.2 * speedMul) * 0.018;
 
-        // Mouth audio displacement — visible only when speaking
-        const mouthY = isMouth[k]
-          ? Math.sin(time * 8 + ph) * voice * 0.10
-          : 0;
-
-        // Breathing scale for non-mouth particles (subtle)
-        const breath = 1 + Math.sin(time * 1.2 * speedMul) * 0.015;
-
-        // During the first 1.4s, lerp from initial scatter to anchor.
         if (assemble < 1) {
           const cx = posArr[k * 3], cy = posArr[k * 3 + 1], cz = posArr[k * 3 + 2];
           posArr[k * 3]     = cx + ((ax + jx) * breath - cx) * 0.04;
@@ -274,15 +339,33 @@
           posArr[k * 3 + 2] = az + jz;
         }
       }
-      particles.geometry.attributes.position.needsUpdate = true;
+      faceLayer.geometry.attributes.position.needsUpdate = true;
 
-      // Slow head sway — a few degrees in Y, less in X. Faster during
-      // active states.
-      particles.rotation.y = Math.sin(time * 0.25 * speedMul) * 0.16;
-      particles.rotation.x = Math.sin(time * 0.18 * speedMul) * 0.05;
+      faceLayer.material.size = state === 'speaking' ? (0.085 + voice * 0.06) : 0.085;
 
-      // Particle size pulses lightly with voice level when speaking.
-      material.size = state === 'speaking' ? (0.045 + voice * 0.025) : 0.045;
+      // Core glow pulses with state + voice
+      const coreBase = state === 'speaking' ? (1.4 + voice * 0.6)
+                     : state === 'fault'    ? 0.9
+                     : 1.4 + Math.sin(time * 0.9 * speedMul) * 0.10;
+      coreLayer.material.size = coreBase;
+      coreLayer.material.color.copy(faceLerped).lerp(coreWhite, 0.55);
+      coreLayer.material.opacity = 0.45 + Math.sin(time * 0.7 * speedMul) * 0.10 + voice * 0.20;
+
+      // Orbital rings rotate at their own rates; color follows face
+      for (const ring of rings) {
+        ring.mesh.rotation.z += ring.rotSpeed * 0.01 * speedMul;
+        ring.mesh.rotation.y += ring.rotSpeed * 0.004 * speedMul;
+        ring.material.color.lerp(faceTarget, 0.04);
+      }
+
+      // Nebula drifts slowly
+      nebulaLayer.rotation.y = time * 0.04 * speedMul;
+      nebulaLayer.rotation.x = Math.sin(time * 0.08) * 0.05;
+      nebulaLayer.material.opacity = 0.30 + Math.sin(time * 0.5) * 0.08 + voice * 0.10;
+
+      // Face sway
+      faceLayer.rotation.y = Math.sin(time * 0.25 * speedMul) * 0.16;
+      faceLayer.rotation.x = Math.sin(time * 0.18 * speedMul) * 0.05;
 
       renderer.render(scene, camera);
       requestAnimationFrame(frame);
@@ -291,11 +374,12 @@
     resize();
     requestAnimationFrame(frame);
 
-    console.log('[face] particle face initialized — ' + PARTICLE_COUNT + ' particles');
+    console.log('[face] v2 initialized — face=' + FACE_COUNT +
+                ', rings=' + (rings.length * RING_COUNT) +
+                ', nebula=' + NEBULA_COUNT +
+                ', core=1');
   }
 
-  // Wait for DOM + Three.js. Three.js is loaded async/defer-ish via CDN
-  // so we may need to wait. Poll briefly for window.THREE.
   function waitForThreeAndInit() {
     let attempts = 0;
     const interval = setInterval(() => {
