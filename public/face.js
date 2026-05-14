@@ -212,18 +212,17 @@
       const voice = (typeof window !== 'undefined' && window.__voiceLevel) ? window.__voiceLevel : 0;
       const tSec = now * 0.001;
 
-      // Live-state idle/voice motion params
+      // Live-state idle motion — keeps the whole face alive when quiet.
+      // The talking motion (jaw drop / lip split / lower-face shimmer) is
+      // applied separately and ONLY to the lower face, so the upper face
+      // stays still when Zion speaks (otherwise the whole face waves).
       const orbOmega = 2 * Math.PI * 0.4;
       const orbPhase = tSec * orbOmega;
-      // Fast syllable-rate wobble layered on top of the slow idle orbit —
-      // gives the face a per-phoneme shimmer when voice is active.
-      const sylPhase = tSec * 2 * Math.PI * 6.0;
+      const sylPhase = tSec * 2 * Math.PI * 6.0; // ~6 Hz phoneme rate
       const idleAmp = 2.5;
-      const voiceOrbAmp = 9 * voice;
-      const voiceSylAmp = 4 * voice;
-      const ampPx = idleAmp + voiceOrbAmp;
-      // Breath: subtle global scale wobble + voice inflation (boosted)
-      const breathLive = 1 + 0.015 * Math.sin(tSec * 2 * Math.PI * 0.25) + 0.06 * voice;
+      // Breath: subtle wobble only — no voice-driven inflation (it was
+      // pumping the whole face on each word, contributing to the wave look).
+      const breathLive = 1 + 0.015 * Math.sin(tSec * 2 * Math.PI * 0.25);
       const breath = phase === 'live' ? breathLive : 1;
       const sX = scale * breath;
       const sY = scale * breath;
@@ -245,20 +244,37 @@
         // then project through the breath-scaled (sX, sY) at draw time.
         // Stash image-space positions; pass 2 projects them.
         const imgHinv = 1 / imgH;
+        // Lip/mouth band center (y_norm). Bbox runs from crown (y_norm=0)
+        // to just under the chin (y_norm=1.0). Lips sit around 0.69.
+        const LIP_Y = 0.69;
+        const LIP_HALF = 0.10;  // half-width of the lip band, in y_norm
         for (let i = 0; i < n; i++) {
-          // Slow orbit (idle + voice-amplified)
-          const dx0 = ampPx * Math.sin(orbPhase + phA[i]);
-          const dy0 = ampPx * Math.sin(orbPhase + phB[i]);
-          // Fast syllable wobble — only kicks in with voice
-          const sx = voiceSylAmp * Math.sin(sylPhase + phA[i] * 1.7);
-          const sy = voiceSylAmp * Math.sin(sylPhase + phB[i] * 1.7);
-          // Jaw drop on the lower face during speech peaks (stronger)
+          // Idle breathing — every dot, voice-independent
+          const idleDx = idleAmp * Math.sin(orbPhase + phA[i]);
+          const idleDy = idleAmp * Math.sin(orbPhase + phB[i]);
+
           const yNorm = ys[i] * imgHinv;
-          const jaw = yNorm > 0.55 ? voice * 8 * (yNorm - 0.55) / 0.45 : 0;
-          // Brow lift on the upper face during speech peaks (subtle)
-          const brow = yNorm < 0.35 ? -voice * 2 * (0.35 - yNorm) / 0.35 : 0;
-          const imgX = xs[i] + dx0 + sx;
-          const imgY = ys[i] + dy0 + sy + jaw + brow;
+
+          // Jaw drop — linear ramp from 0 at y_norm 0.5 to 1 at chin.
+          // Voice-scaled. The lower the dot, the more it drops, like a
+          // jaw rotating around the temporomandibular axis.
+          const jawIntensity = yNorm > 0.5 ? (yNorm - 0.5) * 2 : 0; // 0..1
+          const jawDrop = voice * 22 * jawIntensity;
+
+          // Lip split — narrow band centered on the lips. Dots above the
+          // lip center lift up, dots below push down. Makes the mouth
+          // visibly part with voice.
+          const lipDist = yNorm - LIP_Y;
+          const lipKernel = Math.max(0, 1 - Math.abs(lipDist) / LIP_HALF);
+          const lipSplit = voice * 7 * lipKernel * (lipDist >= 0 ? 1 : -1);
+
+          // Phoneme shimmer — fast wobble, scoped to the lower face so the
+          // upper face stays still. Drives the per-syllable detail.
+          const shimX = voice * 1.4 * jawIntensity * Math.sin(sylPhase + phA[i] * 1.7);
+          const shimY = voice * 1.4 * jawIntensity * Math.sin(sylPhase + phB[i] * 1.7);
+
+          const imgX = xs[i] + idleDx + shimX;
+          const imgY = ys[i] + idleDy + jawDrop + lipSplit + shimY;
           pxArr[i] = cX + (imgX - cxImg) * sX;
           pyArr[i] = cY + (imgY - cyImg) * sY;
         }
