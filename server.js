@@ -59,13 +59,16 @@ app.use(helmet({
 
 app.use(cors({
   origin: process.env.NODE_ENV === 'production'
-    ? [process.env.ZION_PUBLIC_ORIGIN || 'https://zion-ai.onrender.com']
+    ? [process.env.ZION_PUBLIC_ORIGIN || 'https://zion-the-powerful-ai.onrender.com']
     : ['http://localhost:3000'],
   credentials: true
 }));
 
 app.use(express.json({ limit: '10mb' }));
-app.use(express.static('public'));
+// `index: false` so express.static doesn't auto-serve any leftover
+// index.html for `GET /`. The catch-all `app.get('*')` below owns
+// the HTML response and serves the template-substituted Zion UI.
+app.use(express.static('public', { index: false }));
 
 app.use('/api/auth', authRoutes);
 app.use('/api/chat', chatRoutes);
