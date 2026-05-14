@@ -1,6 +1,5 @@
 # Zion — The Powerful AI · Tiffani's Personal Companion
-# PR 1: Web service only. Cron workers (reflection / memory-decay /
-# memory-compression) land in PR 2 with the consciousness layer.
+# PR 2: web service + cron workers (memory decay + compression)
 
 services:
   - type: web
@@ -13,10 +12,12 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
+      # Core API keys
       - key: ANTHROPIC_API_KEY
         sync: false
       - key: OPENAI_API_KEY
         sync: false
+      # Supabase
       - key: SUPABASE_URL
         sync: false
       - key: SUPABASE_ANON_KEY
@@ -25,8 +26,14 @@ services:
         sync: false
       - key: SUPABASE_JWT_SECRET
         sync: false
+      # Search + semantic memory
       - key: TAVILY_API_KEY
         sync: false
+      - key: PINECONE_API_KEY
+        sync: false
+      - key: PINECONE_INDEX
+        value: zion-memory
+      # Auth: both users + their passwords (auto-seeded on boot)
       - key: ZION_OWNER_EMAIL
         sync: false
       - key: ZION_OWNER_PASSWORD
@@ -37,19 +44,62 @@ services:
         sync: false
       - key: ZION_OWNER_TIMEZONE
         value: America/Los_Angeles
-      - key: PINECONE_API_KEY
+      # Proactive email (PR 2)
+      - key: PROACTIVE_EMAIL_ENABLED
+        value: "false"
+      - key: EMAIL_PROVIDER
+        value: gmail
+      - key: GMAIL_USER
         sync: false
-      - key: PINECONE_INDEX
-        value: zion-memory
+      - key: GMAIL_APP_PASSWORD
+        sync: false
+      - key: ZION_EMAIL_FROM
+        sync: false
+      - key: USER_EMAIL
+        sync: false
+      # Optional secondary providers
       - key: ELEVENLABS_API_KEY
         sync: false
       - key: GROQ_API_KEY
         sync: false
       - key: PERPLEXITY_API_KEY
         sync: false
+      # Governance (dormant by default; flip when ready)
       - key: CLASPION_ENABLED
         value: "false"
       - key: CLASPION_FAIL_MODE
         value: block
       - key: CLASPION_ACTOR_ID
         value: zion
+
+  # Memory decay cron (daily, 04:00 UTC)
+  - type: cron
+    name: zion-memory-decay
+    env: node
+    schedule: "0 4 * * *"
+    buildCommand: npm install
+    startCommand: node workers/memory-decay-worker.js
+    envVars:
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_KEY
+        sync: false
+
+  # Memory compression cron (daily, 04:30 UTC — 30 min after decay)
+  - type: cron
+    name: zion-memory-compression
+    env: node
+    schedule: "30 4 * * *"
+    buildCommand: npm install
+    startCommand: node workers/memory-compression-worker.js
+    envVars:
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_KEY
+        sync: false
