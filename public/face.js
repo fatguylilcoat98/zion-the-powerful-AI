@@ -1,18 +1,19 @@
 /*
-  Zion — Particle Face v9 (image-driven, Stage 1.1).
+  Zion — Particle Face v10 (stippling, Stage 1 redo).
 
-  Iteration on Stage 1 per Chris's review:
-    - 11895 particles (was 7689) for finer cinematic grain
-    - LUM_MIN dropped from 30 to 15 — captures dimmer ring/shoulder
-      detail that was missing from the previous render
-    - pSize reduced ~35% (from scale*2.2 to scale*1.4) for the
-      fine-grain look from the reference vs the chunky 8-bit feel
-    - Data split across 3 chunks: zion-particle-data-{1,2,3}.json
+  Per Chris's review: replace the old grid-sampled silhouette with a true
+  stippled portrait. Particles are now rejection-sampled from the cropped
+  face region of the reference, with density proportional to source
+  brightness. No rings, no background — just the face.
 
-  Same Stage 1 scope: static particles, fade in on CONVERSE entry,
-  fade out on exit. No animation yet.
+  Data format (v2):
+    /zion-particle-meta.json     -> { bbox: {w, h}, count, ... }
+    /zion-particle-data-{1,2,3}.json -> arrays of [x, y, brightness]
+                                        where x,y are in bbox-local pixels
+                                        and brightness is 0..1.
 
-  Fail-safes: any fetch / decode / canvas error → orb stays visible.
+  Stage 1 scope: static dots, fade in on CONVERSE entry, fade out on exit.
+  Animation (breathing, lip sync, formation) lands in Stages 2-4.
 */
 
 (function () {
@@ -23,7 +24,7 @@
 
     const orbCanvas    = document.getElementById('orbCanvas');
     const neuralCenter = document.querySelector('.neural-center');
-    if (!neuralCenter) { console.warn('[face v9] neural-center missing'); return; }
+    if (!neuralCenter) { console.warn('[face v10] neural-center missing'); return; }
 
     const faceCanvas = document.createElement('canvas');
     faceCanvas.id = 'faceCanvas';
@@ -32,7 +33,7 @@
 
     const ctx = faceCanvas.getContext('2d');
     if (!ctx) {
-      console.warn('[face v9] 2D context unavailable');
+      console.warn('[face v10] 2D context unavailable');
       neuralCenter.removeChild(faceCanvas);
       return;
     }
@@ -51,23 +52,32 @@
     window.addEventListener('resize', resize);
     resize();
 
-    let particles = null; // { points: Int16Array, imgW, imgH, count }
+    // particles = { x: Float32Array, y: Float32Array, b: Float32Array,
+    //               imgW, imgH, count }
+    let particles = null;
     Promise.all([
+      fetch('/zion-particle-meta.json').then(r => { if (!r.ok) throw new Error('meta ' + r.status); return r.json(); }),
       fetch('/zion-particle-data-1.json').then(r => { if (!r.ok) throw new Error('part1 ' + r.status); return r.json(); }),
       fetch('/zion-particle-data-2.json').then(r => { if (!r.ok) throw new Error('part2 ' + r.status); return r.json(); }),
       fetch('/zion-particle-data-3.json').then(r => { if (!r.ok) throw new Error('part3 ' + r.status); return r.json(); }),
-    ]).then(([a, b, c]) => {
-      const merged = a.points.concat(b.points, c.points);
-      const pts = new Int16Array(merged);
+    ]).then(([meta, a, b, c]) => {
+      const all = a.concat(b, c);
+      const n = all.length;
+      const xs = new Float32Array(n), ys = new Float32Array(n), bs = new Float32Array(n);
+      for (let i = 0; i < n; i++) {
+        xs[i] = all[i][0];
+        ys[i] = all[i][1];
+        bs[i] = all[i][2];
+      }
       particles = {
-        points: pts,
-        imgW: a.imgW,
-        imgH: a.imgH,
-        count: pts.length / 2,
+        x: xs, y: ys, b: bs,
+        imgW: meta.bbox.w,
+        imgH: meta.bbox.h,
+        count: n,
       };
-      console.log('[face v9] loaded ' + particles.count + ' particles (image ' + particles.imgW + 'x' + particles.imgH + ')');
+      console.log('[face v10] loaded ' + n + ' stipple dots (bbox ' + meta.bbox.w + 'x' + meta.bbox.h + ')');
     }).catch(err => {
-      console.warn('[face v9] particle data fetch failed:', err.message);
+      console.warn('[face v10] particle data fetch failed:', err.message);
       if (faceCanvas.parentNode) faceCanvas.parentNode.removeChild(faceCanvas);
     });
 
@@ -110,26 +120,38 @@
         return;
       }
 
-      // Padding 0.88 (was 0.92) → head fills less of canvas, leaves more
-      // room for the ring/shoulder context so the head doesn't read as
-      // top-heavy / baby-like.
-      const padding = 0.88;
+      // Tight face crop: fill ~95% of the smaller canvas dimension.
+      const padding = 0.95;
       const scale = Math.min(w / particles.imgW, h / particles.imgH) * padding;
       const renderW = particles.imgW * scale;
       const renderH = particles.imgH * scale;
       const offX = (w - renderW) / 2;
       const offY = (h - renderH) / 2;
 
-      // Smaller pSize for finer cinematic grain (~35% reduction).
-      const pSize = Math.max(1.0, scale * 1.4);
+      // Small fixed dot size — true stipple grain regardless of canvas size.
+      const dpr = window.devicePixelRatio || 1;
+      const pSize = Math.max(1.0, 1.4 / dpr * dpr); // ~1.4 css px
+      const half = pSize * 0.5;
+
       ctx.save();
       ctx.globalCompositeOperation = 'lighter';
-      ctx.fillStyle = 'rgba(0, 220, 240, ' + (0.50 * alpha).toFixed(3) + ')';
-      const pts = particles.points;
-      for (let i = 0; i < pts.length; i += 2) {
-        const x = offX + pts[i]     * scale;
-        const y = offY + pts[i + 1] * scale;
-        ctx.fillRect(x - pSize * 0.5, y - pSize * 0.5, pSize, pSize);
+      const xs = particles.x, ys = particles.y, bs = particles.b;
+      const n = particles.count;
+      // Group draws by alpha bucket to amortize fillStyle changes.
+      const BUCKETS = 8;
+      for (let bk = 0; bk < BUCKETS; bk++) {
+        const bMin = bk / BUCKETS;
+        const bMax = (bk + 1) / BUCKETS;
+        // Mid-bucket brightness maps to alpha; floor so faint dots still show.
+        const aMul = 0.25 + 0.75 * ((bk + 0.5) / BUCKETS);
+        ctx.fillStyle = 'rgba(0, 220, 240, ' + (0.55 * alpha * aMul).toFixed(3) + ')';
+        for (let i = 0; i < n; i++) {
+          const b = bs[i];
+          if (b < bMin || b >= bMax) continue;
+          const x = offX + xs[i] * scale;
+          const y = offY + ys[i] * scale;
+          ctx.fillRect(x - half, y - half, pSize, pSize);
+        }
       }
       ctx.restore();
 
@@ -137,7 +159,7 @@
     }
 
     requestAnimationFrame(frame);
-    console.log('[face v9] stage 1.1 init — fetching 3 particle chunks');
+    console.log('[face v10] stage 1 stipple init — fetching meta + 3 chunks');
   }
 
   if (document.readyState === 'loading') {
