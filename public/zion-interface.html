@@ -562,6 +562,8 @@
     window.__voiceLevel = 0;
     window.__orbState = orbState;
     window.__STATE_COLORS = STATE_COLORS;
+    // CONVERSE gate — face.js watches this flag to crossfade face <-> orb.
+    window.__converseActive = false;
     function setOrbState(s) { if (STATE_COLORS[s]) { orbState = s; window.__orbState = s; } }
 
     const canvas = $('orbCanvas');
@@ -886,6 +888,7 @@
 
         converseSession = { pc, dc, audioEl, micStream };
         converseActive = true;
+        window.__converseActive = true;
         btn.classList.add('active');
         btn.setAttribute('aria-pressed', 'true');
         $('converseStrip').hidden = false;
@@ -910,6 +913,7 @@
       try { converseSession.audioEl.srcObject = null; } catch (_) {}
       converseSession = null;
       converseActive = false;
+      window.__converseActive = false;
       $('converseButton').classList.remove('active');
       $('converseButton').setAttribute('aria-pressed', 'false');
       $('converseStrip').hidden = true;
