@@ -1,26 +1,17 @@
 /*
-  Zion — Particle Face v9 (image-driven, Stage 1).
+  Zion — Particle Face v9 (image-driven, Stage 1.1).
 
-  Per Chris's revised spec: the particles ARE the reference image.
-  Server-side at build time we sampled the 700x382 reference PNG at
-  3-px step, kept pixels with luminance >= 30 (drops background),
-  serialized the (x, y) positions to plain JSON. 7689 particles
-  split into two files (zion-particle-data-1.json + -2.json) for
-  push-tool ergonomics.
+  Iteration on Stage 1 per Chris's review:
+    - 11895 particles (was 7689) for finer cinematic grain
+    - LUM_MIN dropped from 30 to 15 — captures dimmer ring/shoulder
+      detail that was missing from the previous render
+    - pSize reduced ~35% (from scale*2.2 to scale*1.4) for the
+      fine-grain look from the reference vs the chunky 8-bit feel
+    - Data split across 3 chunks: zion-particle-data-{1,2,3}.json
 
-  STAGE 1 SCOPE (this file):
-    On CONVERSE entry:
-      - Particles fade in over 0.6s at their home positions.
-      - Particles are STATIC — no breathing, no lip sync yet.
-    Goal: verify the particle field visually matches the reference.
+  Same Stage 1 scope: static particles, fade in on CONVERSE entry,
+  fade out on exit. No animation yet.
 
-  Stages 2-4 (each as its own PR after Chris's sign-off):
-    Stage 2: idle breathing (perlin drift around home position)
-    Stage 3: audio-reactive lip sync (FFT → mouth/jaw zones)
-    Stage 4: swarm formation + dandelion dissipation
-
-  Rendering: Canvas2D, fillRect 2px squares with additive blending.
-  Color: teal (matches reference image palette).
   Fail-safes: any fetch / decode / canvas error → orb stays visible.
 */
 
@@ -60,14 +51,13 @@
     window.addEventListener('resize', resize);
     resize();
 
-    // Fetch both chunks in parallel and concatenate.
     let particles = null; // { points: Int16Array, imgW, imgH, count }
     Promise.all([
       fetch('/zion-particle-data-1.json').then(r => { if (!r.ok) throw new Error('part1 ' + r.status); return r.json(); }),
       fetch('/zion-particle-data-2.json').then(r => { if (!r.ok) throw new Error('part2 ' + r.status); return r.json(); }),
-    ]).then(([a, b]) => {
-      const merged = a.points.concat(b.points);
-      // Cast to Int16Array for tighter memory + faster access.
+      fetch('/zion-particle-data-3.json').then(r => { if (!r.ok) throw new Error('part3 ' + r.status); return r.json(); }),
+    ]).then(([a, b, c]) => {
+      const merged = a.points.concat(b.points, c.points);
       const pts = new Int16Array(merged);
       particles = {
         points: pts,
@@ -120,20 +110,21 @@
         return;
       }
 
-      // Fit the image-space coords into the canvas with light padding,
-      // preserving aspect.
-      const padding = 0.92;
+      // Padding 0.88 (was 0.92) → head fills less of canvas, leaves more
+      // room for the ring/shoulder context so the head doesn't read as
+      // top-heavy / baby-like.
+      const padding = 0.88;
       const scale = Math.min(w / particles.imgW, h / particles.imgH) * padding;
       const renderW = particles.imgW * scale;
       const renderH = particles.imgH * scale;
       const offX = (w - renderW) / 2;
       const offY = (h - renderH) / 2;
 
-      const pSize = Math.max(1.4, scale * 2.2);
+      // Smaller pSize for finer cinematic grain (~35% reduction).
+      const pSize = Math.max(1.0, scale * 1.4);
       ctx.save();
       ctx.globalCompositeOperation = 'lighter';
-      // Slightly varied teal — additive blending makes overlaps brighten.
-      ctx.fillStyle = 'rgba(0, 220, 240, ' + (0.55 * alpha).toFixed(3) + ')';
+      ctx.fillStyle = 'rgba(0, 220, 240, ' + (0.50 * alpha).toFixed(3) + ')';
       const pts = particles.points;
       for (let i = 0; i < pts.length; i += 2) {
         const x = offX + pts[i]     * scale;
@@ -146,7 +137,7 @@
     }
 
     requestAnimationFrame(frame);
-    console.log('[face v9] stage 1 init — fetching particle data');
+    console.log('[face v9] stage 1.1 init — fetching 3 particle chunks');
   }
 
   if (document.readyState === 'loading') {
