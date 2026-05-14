@@ -1,19 +1,16 @@
 /*
-  Zion — Particle Face v10 (stippling, Stage 1 redo).
+  Zion — Particle Face v11 (stippling + idle breathing, Stage 2).
 
-  Per Chris's review: replace the old grid-sampled silhouette with a true
-  stippled portrait. Particles are now rejection-sampled from the cropped
-  face region of the reference, with density proportional to source
-  brightness. No rings, no background — just the face.
+  Stage 1 (merged): rejection-sampled stipple of the face region of the
+  reference, masked to an egg-shaped envelope so no halo dots float
+  outside the head.
 
-  Data format (v2):
-    /zion-particle-meta.json     -> { bbox: {w, h}, count, ... }
-    /zion-particle-data-{1,2,3}.json -> arrays of [x, y, brightness]
-                                        where x,y are in bbox-local pixels
-                                        and brightness is 0..1.
+  Stage 2 adds idle breathing. Each dot drifts in a small Lissajous orbit
+  around its home position; the per-dot phases are derived from home
+  coordinates so neighboring dots move similarly. Net effect: face stays
+  recognizable, just feels alive — like a held breath in and out.
 
-  Stage 1 scope: static dots, fade in on CONVERSE entry, fade out on exit.
-  Animation (breathing, lip sync, formation) lands in Stages 2-4.
+  Amplitude ~2.5 px in source coords. Rate ~0.4 Hz (one in/out per 2.5 s).
 */
 
 (function () {
@@ -24,7 +21,7 @@
 
     const orbCanvas    = document.getElementById('orbCanvas');
     const neuralCenter = document.querySelector('.neural-center');
-    if (!neuralCenter) { console.warn('[face v10] neural-center missing'); return; }
+    if (!neuralCenter) { console.warn('[face v11] neural-center missing'); return; }
 
     const faceCanvas = document.createElement('canvas');
     faceCanvas.id = 'faceCanvas';
@@ -33,7 +30,7 @@
 
     const ctx = faceCanvas.getContext('2d');
     if (!ctx) {
-      console.warn('[face v10] 2D context unavailable');
+      console.warn('[face v11] 2D context unavailable');
       neuralCenter.removeChild(faceCanvas);
       return;
     }
@@ -64,20 +61,28 @@
       const all = a.concat(b, c);
       const n = all.length;
       const xs = new Float32Array(n), ys = new Float32Array(n), bs = new Float32Array(n);
+      // Per-dot phase offsets for the idle-breathing orbit. Derived from each
+      // dot's home position so spatial coherence emerges — neighbors drift
+      // together rather than each dot doing its own random jitter.
+      const phA = new Float32Array(n), phB = new Float32Array(n);
       for (let i = 0; i < n; i++) {
-        xs[i] = all[i][0];
-        ys[i] = all[i][1];
+        const x = all[i][0], y = all[i][1];
+        xs[i] = x;
+        ys[i] = y;
         bs[i] = all[i][2];
+        phA[i] = Math.sin(x * 0.011 + y * 0.013) * 7;
+        phB[i] = Math.cos(x * 0.013 + y * 0.011) * 7;
       }
       particles = {
         x: xs, y: ys, b: bs,
+        phA: phA, phB: phB,
         imgW: meta.bbox.w,
         imgH: meta.bbox.h,
         count: n,
       };
-      console.log('[face v10] loaded ' + n + ' stipple dots (bbox ' + meta.bbox.w + 'x' + meta.bbox.h + ')');
+      console.log('[face v11] loaded ' + n + ' stipple dots (bbox ' + meta.bbox.w + 'x' + meta.bbox.h + ')');
     }).catch(err => {
-      console.warn('[face v10] particle data fetch failed:', err.message);
+      console.warn('[face v11] particle data fetch failed:', err.message);
       if (faceCanvas.parentNode) faceCanvas.parentNode.removeChild(faceCanvas);
     });
 
@@ -133,10 +138,27 @@
       const pSize = Math.max(1.0, 1.4 / dpr * dpr); // ~1.4 css px
       const half = pSize * 0.5;
 
+      // Idle breathing: each dot orbits its home position. omega controls
+      // breath rate, ampPx controls amplitude in source-pixel space (gets
+      // scaled to canvas with everything else).
+      const tSec = now * 0.001;
+      const omega = 2 * Math.PI * 0.4;       // ~0.4 Hz, one breath per 2.5 s
+      const ampPx = 2.5;                     // source-pixel amplitude
+      const phaseT = tSec * omega;
+      // Subtle global breath pulse — overall scale wobble of ~1.5% so the
+      // whole head inhales/exhales, not just per-dot jitter.
+      const breath = 1 + 0.015 * Math.sin(tSec * 2 * Math.PI * 0.25);
+      const sX = scale * breath;
+      const sY = scale * breath;
+      const cX = offX + (particles.imgW * scale) * 0.5;
+      const cY = offY + (particles.imgH * scale) * 0.5;
+
       ctx.save();
       ctx.globalCompositeOperation = 'lighter';
       const xs = particles.x, ys = particles.y, bs = particles.b;
+      const phA = particles.phA, phB = particles.phB;
       const n = particles.count;
+      const sin = Math.sin;
       // Group draws by alpha bucket to amortize fillStyle changes.
       const BUCKETS = 8;
       for (let bk = 0; bk < BUCKETS; bk++) {
@@ -148,8 +170,13 @@
         for (let i = 0; i < n; i++) {
           const b = bs[i];
           if (b < bMin || b >= bMax) continue;
-          const x = offX + xs[i] * scale;
-          const y = offY + ys[i] * scale;
+          const hx = xs[i], hy = ys[i];
+          const dx = ampPx * sin(phaseT + phA[i]);
+          const dy = ampPx * sin(phaseT + phB[i]);
+          // Position around the centroid so the breath scale pulses outward
+          // from the face center rather than the top-left of the bbox.
+          const x = cX + (hx - particles.imgW * 0.5 + dx) * sX;
+          const y = cY + (hy - particles.imgH * 0.5 + dy) * sY;
           ctx.fillRect(x - half, y - half, pSize, pSize);
         }
       }
@@ -159,7 +186,7 @@
     }
 
     requestAnimationFrame(frame);
-    console.log('[face v10] stage 1 stipple init — fetching meta + 3 chunks');
+    console.log('[face v11] stage 2 stipple + breathing init — fetching meta + 3 chunks');
   }
 
   if (document.readyState === 'loading') {
