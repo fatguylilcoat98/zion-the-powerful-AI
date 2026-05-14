@@ -215,11 +215,15 @@
       // Live-state idle/voice motion params
       const orbOmega = 2 * Math.PI * 0.4;
       const orbPhase = tSec * orbOmega;
+      // Fast syllable-rate wobble layered on top of the slow idle orbit —
+      // gives the face a per-phoneme shimmer when voice is active.
+      const sylPhase = tSec * 2 * Math.PI * 6.0;
       const idleAmp = 2.5;
-      const voiceAmp = 4.5 * voice;
-      const ampPx = idleAmp + voiceAmp;
-      // Breath: subtle global scale wobble + voice inflation
-      const breathLive = 1 + 0.015 * Math.sin(tSec * 2 * Math.PI * 0.25) + 0.03 * voice;
+      const voiceOrbAmp = 9 * voice;
+      const voiceSylAmp = 4 * voice;
+      const ampPx = idleAmp + voiceOrbAmp;
+      // Breath: subtle global scale wobble + voice inflation (boosted)
+      const breathLive = 1 + 0.015 * Math.sin(tSec * 2 * Math.PI * 0.25) + 0.06 * voice;
       const breath = phase === 'live' ? breathLive : 1;
       const sX = scale * breath;
       const sY = scale * breath;
@@ -242,13 +246,19 @@
         // Stash image-space positions; pass 2 projects them.
         const imgHinv = 1 / imgH;
         for (let i = 0; i < n; i++) {
-          const dx = ampPx * Math.sin(orbPhase + phA[i]);
-          const dy = ampPx * Math.sin(orbPhase + phB[i]);
+          // Slow orbit (idle + voice-amplified)
+          const dx0 = ampPx * Math.sin(orbPhase + phA[i]);
+          const dy0 = ampPx * Math.sin(orbPhase + phB[i]);
+          // Fast syllable wobble — only kicks in with voice
+          const sx = voiceSylAmp * Math.sin(sylPhase + phA[i] * 1.7);
+          const sy = voiceSylAmp * Math.sin(sylPhase + phB[i] * 1.7);
+          // Jaw drop on the lower face during speech peaks (stronger)
           const yNorm = ys[i] * imgHinv;
-          const jaw = yNorm > 0.55 ? voice * 4 * (yNorm - 0.55) / 0.45 : 0;
-          // Project to canvas now so pass 2 is a single set of fillRects
-          const imgX = xs[i] + dx;
-          const imgY = ys[i] + dy + jaw;
+          const jaw = yNorm > 0.55 ? voice * 8 * (yNorm - 0.55) / 0.45 : 0;
+          // Brow lift on the upper face during speech peaks (subtle)
+          const brow = yNorm < 0.35 ? -voice * 2 * (0.35 - yNorm) / 0.35 : 0;
+          const imgX = xs[i] + dx0 + sx;
+          const imgY = ys[i] + dy0 + sy + jaw + brow;
           pxArr[i] = cX + (imgX - cxImg) * sX;
           pyArr[i] = cY + (imgY - cyImg) * sY;
         }
