@@ -29,6 +29,12 @@ services:
         sync: false
       - key: ZION_OWNER_EMAIL
         sync: false
+      - key: ZION_OWNER_PASSWORD
+        sync: false
+      - key: ZION_ADMIN_EMAIL
+        sync: false
+      - key: ZION_ADMIN_PASSWORD
+        sync: false
       - key: ZION_OWNER_TIMEZONE
         value: America/Los_Angeles
       - key: PINECONE_API_KEY
