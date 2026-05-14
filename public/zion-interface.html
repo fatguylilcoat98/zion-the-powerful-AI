@@ -2,6 +2,8 @@
   Zion Interface v2 — Tiff's AI · The Powerful AI
   PR 2 adds: CONVERSE button (continuous voice via OpenAI Realtime),
   art canvas overlay, and chat-side art intent intercept.
+  Stretch: face.js (loaded separately) renders a Three.js particle
+  face that replaces the canvas-2D orb when WebGL is available.
 
   Backend wiring:
     /api/chat/stream             → conversation
@@ -457,6 +459,9 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+  <!-- Three.js for the particle face (graceful fallback to canvas orb if blocked / WebGL unavailable) -->
+  <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
+  <script src="/face.js" defer></script>
   <script>
     const { createClient } = window.supabase;
     const zionSupabase = createClient('__SUPABASE_URL__', '__SUPABASE_ANON_KEY__', {
@@ -555,7 +560,9 @@
     };
     let orbState = 'idle';
     window.__voiceLevel = 0;
-    function setOrbState(s) { if (STATE_COLORS[s]) orbState = s; }
+    window.__orbState = orbState;
+    window.__STATE_COLORS = STATE_COLORS;
+    function setOrbState(s) { if (STATE_COLORS[s]) { orbState = s; window.__orbState = s; } }
 
     const canvas = $('orbCanvas');
     const ctx = canvas.getContext('2d');
