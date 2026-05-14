@@ -1,19 +1,33 @@
 /*
-  Zion — Particle Face v10 (stippling, Stage 1 redo).
+  Zion — Particle Face v12 (Stages 2 + 3 + 4, cinematic).
 
-  Per Chris's review: replace the old grid-sampled silhouette with a true
-  stippled portrait. Particles are now rejection-sampled from the cropped
-  face region of the reference, with density proportional to source
-  brightness. No rings, no background — just the face.
+  Pipeline:
+    hidden   -> CONVERSE click  -> forming   (~2.8s spiral inward from scatter)
+    forming  -> auto            -> live      (idle breathing + voice-driven motion)
+    live     -> CONVERSE off    -> dissolving(~2.0s spiral outward + fade)
+    dissolving -> auto          -> hidden    (orb returns)
 
-  Data format (v2):
-    /zion-particle-meta.json     -> { bbox: {w, h}, count, ... }
-    /zion-particle-data-{1,2,3}.json -> arrays of [x, y, brightness]
-                                        where x,y are in bbox-local pixels
-                                        and brightness is 0..1.
+  Per-dot precomputation at load:
+    - home position (xs, ys) and brightness (bs) from the stipple data
+    - polar coords of the home position relative to the bbox center
+      (rH, thH) — used by formation/dissolution as the target/origin
+    - scatter polar (rS, thS) — a random point outside the face envelope
+      where the dot starts (formation) or ends up (dissolution)
+    - phA, phB — phase offsets for the live-state Lissajous breathing
+      orbit, derived from home coords so neighbors drift together
 
-  Stage 1 scope: static dots, fade in on CONVERSE entry, fade out on exit.
-  Animation (breathing, lip sync, formation) lands in Stages 2-4.
+  Per frame:
+    Pass 1: for each dot, compute its current image-space position
+            based on the active phase (formation spiral / live orbit+
+            voice / dissolution spiral). Stash in scratch arrays.
+    Pass 2: bucketed draws — group by brightness so we set fillStyle 8x
+            instead of 17000x.
+
+  Voice: window.__voiceLevel (0..1, smoothed FFT, already populated by
+  zion-interface.html). During live, voice:
+    - amplifies the per-dot orbit amplitude (so whole face responds)
+    - boosts the global breath/inflation scale slightly
+    - adds a jaw-drop bias for dots in the lower face on speech peaks
 */
 
 (function () {
@@ -24,22 +38,22 @@
 
     const orbCanvas    = document.getElementById('orbCanvas');
     const neuralCenter = document.querySelector('.neural-center');
-    if (!neuralCenter) { console.warn('[face v10] neural-center missing'); return; }
+    if (!neuralCenter) { console.warn('[face v12] neural-center missing'); return; }
 
     const faceCanvas = document.createElement('canvas');
     faceCanvas.id = 'faceCanvas';
-    faceCanvas.style.cssText = 'position:absolute; inset:0; width:100%; height:100%; display:block; pointer-events:none; opacity:0; transition:opacity 0.5s ease;';
+    faceCanvas.style.cssText = 'position:absolute; inset:0; width:100%; height:100%; display:block; pointer-events:none; opacity:0; transition:opacity 0.6s ease;';
     neuralCenter.appendChild(faceCanvas);
 
     const ctx = faceCanvas.getContext('2d');
     if (!ctx) {
-      console.warn('[face v10] 2D context unavailable');
+      console.warn('[face v12] 2D context unavailable');
       neuralCenter.removeChild(faceCanvas);
       return;
     }
 
     if (orbCanvas && !orbCanvas.style.transition) {
-      orbCanvas.style.transition = 'opacity 0.5s ease';
+      orbCanvas.style.transition = 'opacity 0.6s ease';
     }
 
     function resize() {
@@ -52,8 +66,6 @@
     window.addEventListener('resize', resize);
     resize();
 
-    // particles = { x: Float32Array, y: Float32Array, b: Float32Array,
-    //               imgW, imgH, count }
     let particles = null;
     Promise.all([
       fetch('/zion-particle-meta.json').then(r => { if (!r.ok) throw new Error('meta ' + r.status); return r.json(); }),
@@ -63,94 +75,223 @@
     ]).then(([meta, a, b, c]) => {
       const all = a.concat(b, c);
       const n = all.length;
+      const imgW = meta.bbox.w, imgH = meta.bbox.h;
+      const cxImg = imgW * 0.5;
+      const cyImg = imgH * 0.5;
+
       const xs = new Float32Array(n), ys = new Float32Array(n), bs = new Float32Array(n);
+      const phA = new Float32Array(n), phB = new Float32Array(n);
+      const rH = new Float32Array(n), thH = new Float32Array(n);
+      // Scatter is parameterized so it remaps to the *canvas* each frame
+      // (responsive to viewport). thS = angle, sf = 0..1 radial factor.
+      const thS = new Float32Array(n), sf = new Float32Array(n);
+
       for (let i = 0; i < n; i++) {
-        xs[i] = all[i][0];
-        ys[i] = all[i][1];
+        const x = all[i][0], y = all[i][1];
+        xs[i] = x;
+        ys[i] = y;
         bs[i] = all[i][2];
+
+        // Live-state orbit phases — spatially coherent (neighbors drift together)
+        phA[i] = Math.sin(x * 0.011 + y * 0.013) * 7;
+        phB[i] = Math.cos(x * 0.013 + y * 0.011) * 7;
+
+        // Polar coords of home position relative to bbox center
+        const dx = x - cxImg, dy = y - cyImg;
+        rH[i]  = Math.sqrt(dx * dx + dy * dy);
+        thH[i] = Math.atan2(dy, dx);
+
+        // Scatter angle + radial factor (resolved against canvas at render time)
+        thS[i] = Math.random() * Math.PI * 2;
+        sf[i]  = Math.random();
       }
+
+      // Scratch arrays for per-frame computed positions (canvas space)
+      const px = new Float32Array(n);
+      const py = new Float32Array(n);
+
       particles = {
         x: xs, y: ys, b: bs,
-        imgW: meta.bbox.w,
-        imgH: meta.bbox.h,
+        phA, phB, rH, thH, thS, sf,
+        px, py,
+        imgW, imgH, cxImg, cyImg,
         count: n,
       };
-      console.log('[face v10] loaded ' + n + ' stipple dots (bbox ' + meta.bbox.w + 'x' + meta.bbox.h + ')');
+      console.log('[face v12] loaded ' + n + ' stipple dots (bbox ' + imgW + 'x' + imgH + ')');
     }).catch(err => {
-      console.warn('[face v10] particle data fetch failed:', err.message);
+      console.warn('[face v12] particle data fetch failed:', err.message);
       if (faceCanvas.parentNode) faceCanvas.parentNode.removeChild(faceCanvas);
     });
 
+    // Phase state machine
+    const FORM_DURATION = 2.8;     // seconds for spiral-in
+    const DISSOLVE_DURATION = 2.0; // seconds for spiral-out
+    const FORM_FADE_IN = 0.6;
+    const DISSOLVE_HOLD = 0.5;     // hold full alpha at start of dissolve
+    // Whole-number extra rotations so dots land EXACTLY on their home angle
+    // at p=1 (a fractional spin count rotates the whole face off-axis).
+    const EXTRA_SPINS = 1;
+    const EXTRA_TWO_PI = EXTRA_SPINS * 2 * Math.PI;
+
     let phase = 'hidden';
     let phaseStart = performance.now();
+
+    // Easing
+    function easeOutCubic(t) { const u = 1 - t; return 1 - u * u * u; }
+    function easeInCubic(t)  { return t * t * t; }
 
     function frame() {
       const now = performance.now();
       const t   = (now - phaseStart) / 1000;
       const converse = !!window.__converseActive;
 
+      // Transitions
       if (phase === 'hidden' && converse && particles) {
-        phase = 'entering';
+        phase = 'forming';
         phaseStart = now;
         faceCanvas.style.opacity = '1';
         if (orbCanvas) orbCanvas.style.opacity = '0';
-      } else if (phase === 'entering' && t > 0.6) {
+      } else if (phase === 'forming' && t >= FORM_DURATION) {
         phase = 'live';
         phaseStart = now;
-      } else if ((phase === 'entering' || phase === 'live') && !converse) {
-        phase = 'exiting';
+      } else if ((phase === 'forming' || phase === 'live') && !converse) {
+        phase = 'dissolving';
         phaseStart = now;
-      } else if (phase === 'exiting' && t > 0.6) {
+        // Reroll scatter angles + factors so dissolve doesn't mirror the entry
+        const n = particles.count;
+        const thS = particles.thS, sf = particles.sf;
+        for (let i = 0; i < n; i++) {
+          thS[i] = Math.random() * Math.PI * 2;
+          sf[i]  = Math.random();
+        }
+      } else if (phase === 'dissolving' && t >= DISSOLVE_DURATION) {
         phase = 'hidden';
         phaseStart = now;
         faceCanvas.style.opacity = '0';
         if (orbCanvas) orbCanvas.style.opacity = '1';
       }
 
-      let alpha = 0;
-      if (phase === 'entering')   alpha = Math.min(1, t / 0.6);
-      else if (phase === 'live')  alpha = 1;
-      else if (phase === 'exiting') alpha = Math.max(0, 1 - t / 0.6);
-
       const w = neuralCenter.clientWidth, h = neuralCenter.clientHeight;
       ctx.clearRect(0, 0, w, h);
 
-      if (!particles || alpha < 0.01) {
+      if (!particles || phase === 'hidden') {
         requestAnimationFrame(frame);
         return;
       }
 
-      // Tight face crop: fill ~95% of the smaller canvas dimension.
-      const padding = 0.95;
-      const scale = Math.min(w / particles.imgW, h / particles.imgH) * padding;
-      const renderW = particles.imgW * scale;
-      const renderH = particles.imgH * scale;
-      const offX = (w - renderW) / 2;
-      const offY = (h - renderH) / 2;
+      const imgW = particles.imgW, imgH = particles.imgH;
+      const cxImg = particles.cxImg, cyImg = particles.cyImg;
 
-      // Small fixed dot size — true stipple grain regardless of canvas size.
+      // Canvas projection: face centroid at canvas center, scaled to fit.
+      const padding = 0.95;
+      const scale = Math.min(w / imgW, h / imgH) * padding;
+      const cX = w * 0.5;
+      const cY = h * 0.5;
+
+      // Scatter ring sized to the canvas: dots arrive from somewhere
+      // between the face envelope (~half the smaller canvas dim) and the
+      // canvas edge — so they're visible at formP=0 instead of off-screen.
+      const minDim = Math.min(w, h);
+      const SCATTER_MIN = minDim * 0.55;
+      const SCATTER_SPREAD = minDim * 0.22;
+
+      // Phase-dependent globals
+      let alpha = 1;
+      let phaseKind = phase;
+      let formP = 0, dissP = 0;
+      if (phase === 'forming') {
+        formP = Math.min(1, t / FORM_DURATION);
+        alpha = Math.min(1, t / FORM_FADE_IN);
+      } else if (phase === 'dissolving') {
+        dissP = Math.min(1, t / DISSOLVE_DURATION);
+        const fadeStart = DISSOLVE_HOLD;
+        const fadeSpan = DISSOLVE_DURATION - DISSOLVE_HOLD;
+        alpha = t < fadeStart ? 1 : Math.max(0, 1 - (t - fadeStart) / fadeSpan);
+      }
+
+      const voice = (typeof window !== 'undefined' && window.__voiceLevel) ? window.__voiceLevel : 0;
+      const tSec = now * 0.001;
+
+      // Live-state idle/voice motion params
+      const orbOmega = 2 * Math.PI * 0.4;
+      const orbPhase = tSec * orbOmega;
+      const idleAmp = 2.5;
+      const voiceAmp = 4.5 * voice;
+      const ampPx = idleAmp + voiceAmp;
+      // Breath: subtle global scale wobble + voice inflation
+      const breathLive = 1 + 0.015 * Math.sin(tSec * 2 * Math.PI * 0.25) + 0.03 * voice;
+      const breath = phase === 'live' ? breathLive : 1;
+      const sX = scale * breath;
+      const sY = scale * breath;
+
+      // Precomputed transit eased progress for the dot loop
+      const formEased = phase === 'forming' ? easeOutCubic(formP) : 0;
+      const dissEased = phase === 'dissolving' ? easeInCubic(dissP) : 0;
+
+      const n = particles.count;
+      const xs = particles.x, ys = particles.y;
+      const phA = particles.phA, phB = particles.phB;
+      const rH = particles.rH, thH = particles.thH;
+      const thS = particles.thS, sf = particles.sf;
+      const pxArr = particles.px, pyArr = particles.py;
+
+      // Pass 1: compute per-dot CANVAS-space positions
+      if (phaseKind === 'live') {
+        // In live, we render the dot's home (+ orbit + voice) in image space,
+        // then project through the breath-scaled (sX, sY) at draw time.
+        // Stash image-space positions; pass 2 projects them.
+        const imgHinv = 1 / imgH;
+        for (let i = 0; i < n; i++) {
+          const dx = ampPx * Math.sin(orbPhase + phA[i]);
+          const dy = ampPx * Math.sin(orbPhase + phB[i]);
+          const yNorm = ys[i] * imgHinv;
+          const jaw = yNorm > 0.55 ? voice * 4 * (yNorm - 0.55) / 0.45 : 0;
+          // Project to canvas now so pass 2 is a single set of fillRects
+          const imgX = xs[i] + dx;
+          const imgY = ys[i] + dy + jaw;
+          pxArr[i] = cX + (imgX - cxImg) * sX;
+          pyArr[i] = cY + (imgY - cyImg) * sY;
+        }
+      } else if (phaseKind === 'forming') {
+        const p = formEased;
+        for (let i = 0; i < n; i++) {
+          const scatterR = SCATTER_MIN + sf[i] * SCATTER_SPREAD;
+          const homeR    = rH[i] * scale;
+          const r  = scatterR + (homeR - scatterR) * p;
+          const th = thS[i] + (thH[i] - thS[i] + EXTRA_TWO_PI) * p;
+          pxArr[i] = cX + r * Math.cos(th);
+          pyArr[i] = cY + r * Math.sin(th);
+        }
+      } else { // dissolving
+        const p = dissEased;
+        for (let i = 0; i < n; i++) {
+          const scatterR = (SCATTER_MIN + sf[i] * SCATTER_SPREAD) * 1.15;
+          const homeR    = rH[i] * scale;
+          const r  = homeR + (scatterR - homeR) * p;
+          const th = thH[i] + (thS[i] - thH[i] + EXTRA_TWO_PI) * p;
+          pxArr[i] = cX + r * Math.cos(th);
+          pyArr[i] = cY + r * Math.sin(th);
+        }
+      }
+
+      // Pass 2: bucketed draws
       const dpr = window.devicePixelRatio || 1;
-      const pSize = Math.max(1.0, 1.4 / dpr * dpr); // ~1.4 css px
+      const pSize = Math.max(1.0, 1.4); // 1.4 css px regardless of dpr
       const half = pSize * 0.5;
 
       ctx.save();
       ctx.globalCompositeOperation = 'lighter';
-      const xs = particles.x, ys = particles.y, bs = particles.b;
-      const n = particles.count;
-      // Group draws by alpha bucket to amortize fillStyle changes.
+      const bs = particles.b;
       const BUCKETS = 8;
       for (let bk = 0; bk < BUCKETS; bk++) {
         const bMin = bk / BUCKETS;
         const bMax = (bk + 1) / BUCKETS;
-        // Mid-bucket brightness maps to alpha; floor so faint dots still show.
         const aMul = 0.25 + 0.75 * ((bk + 0.5) / BUCKETS);
         ctx.fillStyle = 'rgba(0, 220, 240, ' + (0.55 * alpha * aMul).toFixed(3) + ')';
         for (let i = 0; i < n; i++) {
           const b = bs[i];
           if (b < bMin || b >= bMax) continue;
-          const x = offX + xs[i] * scale;
-          const y = offY + ys[i] * scale;
-          ctx.fillRect(x - half, y - half, pSize, pSize);
+          ctx.fillRect(pxArr[i] - half, pyArr[i] - half, pSize, pSize);
         }
       }
       ctx.restore();
@@ -159,7 +300,7 @@
     }
 
     requestAnimationFrame(frame);
-    console.log('[face v10] stage 1 stipple init — fetching meta + 3 chunks');
+    console.log('[face v12] stages 2+3+4 init — forming/live/dissolving with voice');
   }
 
   if (document.readyState === 'loading') {
