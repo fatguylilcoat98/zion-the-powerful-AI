@@ -66,12 +66,16 @@
     window.addEventListener('resize', resize);
     resize();
 
+    // Cache-buster — Render's CDN / browser HTTP cache was holding onto an
+    // older copy of the data files past a deploy. Bump this on every data
+    // change so clients always pull the fresh stipple.
+    const cb = '?v=v13a';
     let particles = null;
     Promise.all([
-      fetch('/zion-particle-meta.json').then(r => { if (!r.ok) throw new Error('meta ' + r.status); return r.json(); }),
-      fetch('/zion-particle-data-1.json').then(r => { if (!r.ok) throw new Error('part1 ' + r.status); return r.json(); }),
-      fetch('/zion-particle-data-2.json').then(r => { if (!r.ok) throw new Error('part2 ' + r.status); return r.json(); }),
-      fetch('/zion-particle-data-3.json').then(r => { if (!r.ok) throw new Error('part3 ' + r.status); return r.json(); }),
+      fetch('/zion-particle-meta.json' + cb).then(r => { if (!r.ok) throw new Error('meta ' + r.status); return r.json(); }),
+      fetch('/zion-particle-data-1.json' + cb).then(r => { if (!r.ok) throw new Error('part1 ' + r.status); return r.json(); }),
+      fetch('/zion-particle-data-2.json' + cb).then(r => { if (!r.ok) throw new Error('part2 ' + r.status); return r.json(); }),
+      fetch('/zion-particle-data-3.json' + cb).then(r => { if (!r.ok) throw new Error('part3 ' + r.status); return r.json(); }),
     ]).then(([meta, a, b, c]) => {
       const all = a.concat(b, c);
       const n = all.length;
@@ -135,6 +139,11 @@
 
     let phase = 'hidden';
     let phaseStart = performance.now();
+    // Smoothed voice envelope — low-pass filter over the raw FFT level so
+    // whole-head motion tracks vocal *activity*, not every microsecond
+    // amplitude blip. This is what drives the head bob; without smoothing
+    // the head would jitter on every phoneme (which read as the "wave").
+    let smoothedVoice = 0;
 
     // Easing
     function easeOutCubic(t) { const u = 1 - t; return 1 - u * u * u; }
@@ -210,7 +219,14 @@
       }
 
       const voice = (typeof window !== 'undefined' && window.__voiceLevel) ? window.__voiceLevel : 0;
+      // Smoothed envelope: ~85ms rise, ~250ms fall. Slow enough to be a
+      // talking-activity signal, not a per-phoneme tracker.
+      smoothedVoice = smoothedVoice * 0.88 + voice * 0.12;
       const tSec = now * 0.001;
+      // Head bob — uniform Y translation of the whole face. Dips down a few
+      // pixels while Zion is actively talking, eases back when quiet. Reads
+      // as a person nodding into their words, not a particle wave.
+      const headBob = smoothedVoice * 4.0;
 
       // Live-state idle motion — keeps the whole face alive when quiet.
       // The talking motion (jaw drop / lip split / lower-face shimmer) is
@@ -276,8 +292,15 @@
           const shimX = voice * 1.4 * jawIntensity * Math.sin(sylPhase + phA[i] * 1.7);
           const shimY = voice * 1.4 * jawIntensity * Math.sin(sylPhase + phB[i] * 1.7);
 
-          const imgX = xs[i] + idleDx + shimX;
-          const imgY = ys[i] + idleDy + jawDrop + lipSplit + shimY;
+          // Whole-face liveliness shimmer — INCOHERENT (phase seeded by
+          // index, not by spatial position). Adjacent dots don't move
+          // together, so no diagonal wave streaks. Very low amplitude so
+          // it reads as "the surface is alive" not "particles are jittering".
+          const liveX = smoothedVoice * 0.7 * Math.sin(tSec * 9.3 + i * 0.71);
+          const liveY = smoothedVoice * 0.7 * Math.cos(tSec * 9.1 + i * 0.91);
+
+          const imgX = xs[i] + idleDx + shimX + liveX;
+          const imgY = ys[i] + idleDy + jawDrop + lipSplit + shimY + headBob + liveY;
           pxArr[i] = cX + (imgX - cxImg) * sX;
           pyArr[i] = cY + (imgY - cyImg) * sY;
         }
