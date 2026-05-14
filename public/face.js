@@ -212,18 +212,17 @@
       const voice = (typeof window !== 'undefined' && window.__voiceLevel) ? window.__voiceLevel : 0;
       const tSec = now * 0.001;
 
-      // Live-state idle/voice motion params
+      // Live-state idle motion — keeps the whole face alive when quiet.
+      // The talking motion (jaw drop / lip split / lower-face shimmer) is
+      // applied separately and ONLY to the lower face, so the upper face
+      // stays still when Zion speaks (otherwise the whole face waves).
       const orbOmega = 2 * Math.PI * 0.4;
       const orbPhase = tSec * orbOmega;
-      // Fast syllable-rate wobble layered on top of the slow idle orbit —
-      // gives the face a per-phoneme shimmer when voice is active.
-      const sylPhase = tSec * 2 * Math.PI * 6.0;
+      const sylPhase = tSec * 2 * Math.PI * 6.0; // ~6 Hz phoneme rate
       const idleAmp = 2.5;
-      const voiceOrbAmp = 9 * voice;
-      const voiceSylAmp = 4 * voice;
-      const ampPx = idleAmp + voiceOrbAmp;
-      // Breath: subtle global scale wobble + voice inflation (boosted)
-      const breathLive = 1 + 0.015 * Math.sin(tSec * 2 * Math.PI * 0.25) + 0.06 * voice;
+      // Breath: subtle wobble only — no voice-driven inflation (it was
+      // pumping the whole face on each word, contributing to the wave look).
+      const breathLive = 1 + 0.015 * Math.sin(tSec * 2 * Math.PI * 0.25);
       const breath = phase === 'live' ? breathLive : 1;
       const sX = scale * breath;
       const sY = scale * breath;
@@ -245,20 +244,40 @@
         // then project through the breath-scaled (sX, sY) at draw time.
         // Stash image-space positions; pass 2 projects them.
         const imgHinv = 1 / imgH;
+        // Lip/mouth band center (y_norm). Bbox now runs crown -> chin only
+        // (no neck shadow). Lips sit around 0.73 in the trimmed bbox.
+        const LIP_Y = 0.73;
+        const LIP_HALF = 0.09;  // half-width of the lip band, in y_norm
+        const JAW_START = 0.55; // y_norm where jaw drop ramp starts (below nose)
+        const JAW_SPAN  = 1.0 - JAW_START;
         for (let i = 0; i < n; i++) {
-          // Slow orbit (idle + voice-amplified)
-          const dx0 = ampPx * Math.sin(orbPhase + phA[i]);
-          const dy0 = ampPx * Math.sin(orbPhase + phB[i]);
-          // Fast syllable wobble — only kicks in with voice
-          const sx = voiceSylAmp * Math.sin(sylPhase + phA[i] * 1.7);
-          const sy = voiceSylAmp * Math.sin(sylPhase + phB[i] * 1.7);
-          // Jaw drop on the lower face during speech peaks (stronger)
+          // Idle breathing — every dot, voice-independent
+          const idleDx = idleAmp * Math.sin(orbPhase + phA[i]);
+          const idleDy = idleAmp * Math.sin(orbPhase + phB[i]);
+
           const yNorm = ys[i] * imgHinv;
-          const jaw = yNorm > 0.55 ? voice * 8 * (yNorm - 0.55) / 0.45 : 0;
-          // Brow lift on the upper face during speech peaks (subtle)
-          const brow = yNorm < 0.35 ? -voice * 2 * (0.35 - yNorm) / 0.35 : 0;
-          const imgX = xs[i] + dx0 + sx;
-          const imgY = ys[i] + dy0 + sy + jaw + brow;
+
+          // Jaw drop — ramp from 0 at JAW_START up to 1 at the chin.
+          // Voice-scaled. The lower the dot, the more it drops, like a
+          // jaw rotating around the temporomandibular axis.
+          const jawIntensity = yNorm > JAW_START ? (yNorm - JAW_START) / JAW_SPAN : 0;
+          const jawDrop = voice * 22 * jawIntensity;
+
+          // Lip split — smooth sin-shaped displacement across the band.
+          // No abrupt crossover at the center (which read as a sharp line);
+          // instead dots near the center barely move, mid-band displaces
+          // most, edges return to zero — like the soft motion of parting lips.
+          const lipDist = yNorm - LIP_Y;
+          const lipKernel = Math.max(0, 1 - Math.abs(lipDist) / LIP_HALF);
+          const lipSplit = voice * 7 * lipKernel * Math.sin(lipDist * Math.PI / LIP_HALF);
+
+          // Phoneme shimmer — fast wobble, scoped to the lower face so the
+          // upper face stays still. Drives the per-syllable detail.
+          const shimX = voice * 1.4 * jawIntensity * Math.sin(sylPhase + phA[i] * 1.7);
+          const shimY = voice * 1.4 * jawIntensity * Math.sin(sylPhase + phB[i] * 1.7);
+
+          const imgX = xs[i] + idleDx + shimX;
+          const imgY = ys[i] + idleDy + jawDrop + lipSplit + shimY;
           pxArr[i] = cX + (imgX - cxImg) * sX;
           pyArr[i] = cY + (imgY - cyImg) * sY;
         }
