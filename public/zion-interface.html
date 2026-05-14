@@ -1,0 +1,942 @@
+<!--
+  Zion Interface — Tiff's AI · The Powerful AI
+  3-column responsive grid: PROVENANCE STREAM · Neural Orb · COGNITIVE PULSE
+  Architecture cloned from Splendor; written fresh for Zion with the
+  teal palette baked in (no purple), version badge wired, and Tiff mode
+  toggles (HOME/WORK/LIST/GRAMMAR) surfaced in the conversation panel.
+
+  Backend wiring (PR 1):
+    /api/chat/stream            → conversation
+    /api/memory/:userId         → provenance stream
+    /api/voice/speak            → TTS
+    /api/tiff/modes  (GET/POST) → tone / list_mode / grammar toggles
+    /version                    → version badge
+-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>Zion — Tiff's AI</title>
+  <link rel="manifest" href="/manifest.json">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --teal-primary: #00BFC4;
+      --teal-bright:  #00E5FF;
+      --teal-soft:    #4FB8C9;
+      --teal-deep:    #0B7A7E;
+      --gold:         #FFD166;
+      --red:          #FF5C5C;
+      --bg-0:         #02040a;
+      --bg-1:         #040810;
+      --bg-2:         #0a1428;
+      --panel-bg:     rgba(15, 22, 36, 0.75);
+      --text:         #ffffff;
+      --text-mute:    #8A99A8;
+      --text-soft:    #d8e6f0;
+      --border:       rgba(0, 191, 196, 0.25);
+      --border-strong:rgba(0, 229, 255, 0.45);
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { height: 100%; width: 100%; overflow: hidden; }
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      background: radial-gradient(ellipse at center, var(--bg-2) 0%, var(--bg-1) 60%, var(--bg-0) 100%);
+      color: var(--text);
+    }
+    body::before {
+      content: '';
+      position: fixed; inset: 0;
+      background-image:
+        linear-gradient(rgba(0, 229, 255, 0.04) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(0, 229, 255, 0.04) 1px, transparent 1px);
+      background-size: 60px 60px;
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    .zion-main {
+      display: grid;
+      grid-template-columns: 22% 1fr 22%;
+      grid-template-rows: 72px 1fr auto;
+      grid-template-areas:
+        "header header header"
+        "provenance canvas pulse"
+        "console console console";
+      height: 100vh; height: 100dvh;
+      width: 100vw;
+      position: relative; z-index: 1;
+    }
+
+    /* Header */
+    .header-bar {
+      grid-area: header;
+      background: linear-gradient(180deg, rgba(10, 18, 32, 0.95), rgba(10, 18, 32, 0.7));
+      border-bottom: 1px solid var(--border);
+      backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+      display: flex; align-items: center; justify-content: center;
+      padding: 0 12px; position: relative; z-index: 1000;
+    }
+    .header-content { text-align: center; }
+    .header-title {
+      font-size: 14px; font-weight: 700;
+      color: var(--teal-bright); letter-spacing: 2.5px;
+      margin-bottom: 3px;
+      text-shadow: 0 0 10px rgba(0, 229, 255, 0.55);
+    }
+    .header-status {
+      font-size: 10px; color: #b0c4de; letter-spacing: 0.8px;
+    }
+    .active-rule { color: #39ff14; font-weight: 600; text-shadow: 0 0 6px rgba(57, 255, 20, 0.6); }
+    .version-badge {
+      font-size: 11px; color: var(--teal-primary);
+      letter-spacing: 1.2px; text-transform: uppercase;
+      margin-top: 3px; font-weight: 600;
+      text-shadow: 0 0 6px rgba(0, 191, 196, 0.45);
+    }
+    .sign-out-link {
+      position: absolute; top: 14px; right: 16px;
+      font-size: 10px; color: rgba(255, 255, 255, 0.4);
+      text-decoration: none; letter-spacing: 1px;
+      text-transform: uppercase; font-weight: 500;
+      transition: color 0.2s; cursor: pointer;
+    }
+    .sign-out-link:hover { color: rgba(255, 255, 255, 0.85); }
+
+    /* Side panels */
+    .provenance-panel { grid-area: provenance; border-right: 1px solid var(--border); }
+    .pulse-panel      { grid-area: pulse;      border-left:  1px solid rgba(0, 191, 196, 0.2); }
+    .provenance-panel, .pulse-panel {
+      background: var(--panel-bg);
+      backdrop-filter: blur(15px); -webkit-backdrop-filter: blur(15px);
+      overflow: hidden;
+      display: flex; flex-direction: column;
+    }
+    .panel-header {
+      padding: 14px 12px 10px 12px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+      flex-shrink: 0;
+    }
+    .panel-title {
+      font-size: 12px; font-weight: 700;
+      letter-spacing: 1.4px; text-transform: uppercase;
+      margin-bottom: 3px;
+      color: var(--teal-bright);
+      text-shadow: 0 0 6px rgba(0, 229, 255, 0.35);
+    }
+    .pulse-panel .panel-title {
+      color: var(--teal-primary);
+      text-shadow: 0 0 6px rgba(0, 191, 196, 0.35);
+    }
+    .panel-subtitle {
+      font-size: 9px; color: #708090;
+      letter-spacing: 0.6px; text-transform: uppercase;
+    }
+    .panel-body { padding: 12px; flex: 1; overflow-y: auto; }
+    .empty-state {
+      color: #708090; font-size: 11px;
+      font-style: italic; padding: 14px 8px;
+      text-align: center;
+    }
+    .memory-card {
+      background: linear-gradient(135deg, rgba(15, 22, 32, 0.9), rgba(25, 32, 42, 0.8));
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 11px;
+      margin-bottom: 10px;
+      font-size: 11px; line-height: 1.4;
+    }
+    .memory-header {
+      display: flex; justify-content: space-between;
+      margin-bottom: 6px;
+      font-size: 10px; color: var(--teal-bright); font-weight: 600;
+    }
+    .memory-header .ref { color: #708090; font-weight: 400; font-size: 9px; }
+    .memory-content {
+      color: var(--text-soft);
+      margin-bottom: 6px;
+      font-size: 10.5px;
+      overflow-wrap: break-word; word-break: break-word;
+    }
+    .memory-meta { font-size: 9px; color: #708090; line-height: 1.45; }
+    .pulse-item {
+      background: rgba(15, 20, 25, 0.6);
+      border-left: 2px solid var(--teal-primary);
+      padding: 6px 8px;
+      margin-bottom: 5px;
+      font-size: 10px;
+      font-family: 'JetBrains Mono', monospace;
+      color: #b0c4de;
+      border-radius: 0 4px 4px 0;
+      line-height: 1.3;
+    }
+
+    /* Neural orb canvas */
+    .neural-center {
+      grid-area: canvas;
+      background: radial-gradient(circle, rgba(0, 191, 196, 0.06), transparent 65%);
+      overflow: hidden;
+      position: relative;
+      min-width: 0; min-height: 0;
+    }
+    #orbCanvas {
+      position: absolute; inset: 0;
+      width: 100%; height: 100%;
+      display: block;
+    }
+
+    /* Conversation panel */
+    .conversation-panel {
+      grid-area: console;
+      background: linear-gradient(180deg, transparent, rgba(15, 22, 36, 0.95) 40%);
+      border-top: 1px solid var(--border);
+      backdrop-filter: blur(15px); -webkit-backdrop-filter: blur(15px);
+      padding: 12px 20px 16px 20px;
+      display: flex; flex-direction: column; gap: 10px;
+      z-index: 100;
+    }
+
+    /* Mode pill row */
+    .mode-row {
+      display: flex; gap: 8px; flex-wrap: wrap;
+      align-items: center; justify-content: center;
+      max-width: 820px; width: 100%; align-self: center;
+    }
+    .mode-pill {
+      font-size: 10px; font-weight: 700;
+      letter-spacing: 0.9px; text-transform: uppercase;
+      padding: 5px 11px; border-radius: 14px;
+      border: 1px solid var(--border);
+      background: rgba(15, 22, 36, 0.6);
+      color: var(--text-mute);
+      cursor: pointer;
+      transition: background 120ms, color 120ms, border-color 120ms;
+      font-family: inherit;
+    }
+    .mode-pill:hover { color: var(--teal-bright); border-color: rgba(0, 229, 255, 0.5); }
+    .mode-pill.active {
+      background: linear-gradient(135deg, rgba(0, 191, 196, 0.22), rgba(0, 229, 255, 0.18));
+      border-color: var(--teal-bright);
+      color: #ffffff;
+      text-shadow: 0 0 4px rgba(0, 229, 255, 0.5);
+    }
+    .mode-label {
+      font-size: 9px; color: var(--text-mute);
+      letter-spacing: 1.2px; text-transform: uppercase;
+      margin-right: 2px;
+    }
+
+    .response-bubble {
+      background: linear-gradient(135deg, rgba(30, 35, 50, 0.95), rgba(20, 25, 40, 0.9));
+      border: 1px solid var(--border-strong);
+      border-radius: 14px;
+      padding: 12px 16px;
+      color: var(--text);
+      font-size: 13px; line-height: 1.45;
+      max-width: 820px; width: 100%;
+      align-self: center;
+      max-height: 130px; overflow-y: auto;
+      box-shadow: 0 4px 18px rgba(0, 0, 0, 0.35), 0 0 12px rgba(0, 191, 196, 0.08);
+      white-space: pre-wrap; word-break: break-word;
+    }
+    .response-bubble:empty::before {
+      content: 'Ready when you are.';
+      color: rgba(176, 196, 222, 0.5);
+    }
+
+    .input-bar {
+      display: flex; align-items: center;
+      background: rgba(15, 20, 30, 0.85);
+      border: 1px solid var(--border-strong);
+      border-radius: 28px;
+      padding: 5px 5px 5px 18px;
+      gap: 6px;
+      max-width: 820px; width: 100%; align-self: center;
+    }
+    .message-input {
+      flex: 1; min-width: 0;
+      background: transparent; border: none; outline: none;
+      color: var(--text); font-size: 14px; padding: 9px 0;
+      font-family: inherit;
+    }
+    .message-input::placeholder { color: rgba(176, 196, 222, 0.5); }
+
+    .input-controls { display: flex; gap: 6px; flex-shrink: 0; }
+    .control-btn {
+      height: 34px; min-width: 60px;
+      padding: 0 12px;
+      border-radius: 18px;
+      border: 1px solid var(--border-strong);
+      background: linear-gradient(135deg, rgba(35, 40, 55, 0.9), rgba(25, 30, 45, 0.8));
+      color: var(--text-soft);
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s, box-shadow 0.15s, transform 0.08s;
+      display: inline-flex; align-items: center; justify-content: center;
+      font-family: inherit;
+      font-size: 11px; font-weight: 700;
+      letter-spacing: 1px; text-transform: uppercase;
+      -webkit-tap-highlight-color: transparent;
+      user-select: none;
+    }
+    .control-btn:hover:not(:disabled) {
+      border-color: var(--teal-bright); color: var(--text);
+      box-shadow: 0 0 14px rgba(0, 229, 255, 0.5);
+    }
+    .control-btn:active:not(:disabled) {
+      transform: scale(0.94);
+      background: linear-gradient(135deg, var(--teal-bright), var(--teal-primary));
+      color: #042026;
+    }
+    .control-btn.active {
+      background: linear-gradient(135deg, var(--teal-bright), var(--teal-primary));
+      color: #042026; border-color: var(--teal-bright);
+      box-shadow: 0 0 18px rgba(0, 229, 255, 0.65);
+    }
+    .send-btn {
+      background: linear-gradient(135deg, var(--teal-bright), var(--teal-primary));
+      color: #ffffff; border-color: var(--teal-bright);
+    }
+    .send-btn:disabled { opacity: 0.4; cursor: not-allowed; box-shadow: none; }
+
+    /* Login overlay */
+    .login-overlay {
+      position: fixed; inset: 0;
+      background: rgba(0, 0, 0, 0.85);
+      backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+      display: flex; align-items: center; justify-content: center;
+      z-index: 3000; padding: 20px;
+    }
+    .login-overlay.hidden { display: none; }
+    .login-card {
+      background: rgba(10, 18, 32, 0.98);
+      border: 1px solid var(--border-strong);
+      border-radius: 14px; padding: 28px 24px;
+      width: 100%; max-width: 360px;
+      box-shadow: 0 0 40px rgba(0, 191, 196, 0.25);
+    }
+    .login-wordmark {
+      font-size: 11px; font-weight: 700;
+      color: var(--teal-bright); letter-spacing: 2.5px;
+      text-transform: uppercase; text-align: center;
+      margin-bottom: 8px;
+      text-shadow: 0 0 8px rgba(0, 229, 255, 0.5);
+    }
+    .login-label {
+      font-size: 10px; color: rgba(255, 255, 255, 0.6);
+      letter-spacing: 1.2px; text-transform: uppercase;
+      text-align: center; margin-bottom: 24px;
+    }
+    .login-input {
+      width: 100%; background: rgba(15, 25, 40, 0.9);
+      border: 1px solid var(--border);
+      border-radius: 8px; padding: 12px 14px;
+      color: var(--text); font-size: 14px;
+      font-family: inherit; margin-bottom: 12px;
+      transition: border-color 0.2s;
+    }
+    .login-input:focus {
+      outline: none; border-color: var(--teal-bright);
+      box-shadow: 0 0 12px rgba(0, 229, 255, 0.3);
+    }
+    .login-input::placeholder { color: rgba(176, 196, 222, 0.5); }
+    .login-btn {
+      width: 100%; background: linear-gradient(135deg, var(--teal-bright), var(--teal-primary));
+      color: #042026; border: none; border-radius: 8px;
+      padding: 14px; font-size: 11px; font-weight: 700;
+      letter-spacing: 1.5px; text-transform: uppercase;
+      cursor: pointer; margin-bottom: 16px;
+      font-family: inherit;
+    }
+    .login-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+    .login-message {
+      font-size: 11px; margin-top: 12px; padding: 8px 12px;
+      border-radius: 6px; line-height: 1.4;
+    }
+    .login-message.error {
+      background: rgba(255, 73, 87, 0.15);
+      border: 1px solid rgba(255, 73, 87, 0.3);
+      color: #ff6b80;
+    }
+    .login-message.success {
+      background: rgba(57, 255, 20, 0.15);
+      border: 1px solid rgba(57, 255, 20, 0.3);
+      color: #39ff14;
+    }
+
+    /* Responsive */
+    @media (max-width: 900px) {
+      .zion-main { grid-template-columns: 0 1fr 0; }
+      .provenance-panel, .pulse-panel { display: none; }
+    }
+    @media (max-width: 720px) {
+      .header-title { font-size: 11px; letter-spacing: 1.2px; }
+      .header-status { font-size: 8.5px; letter-spacing: 0.3px; }
+      .control-btn { height: 30px; min-width: 50px; font-size: 10px; padding: 0 9px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="zion-main">
+    <header class="header-bar">
+      <div class="header-content">
+        <div class="header-title">CLASPION GOVERNANCE</div>
+        <div class="version-badge" id="versionBadge">Zion v…</div>
+        <div class="header-status">
+          CURRENT BINDING DECISIONS: 1. TRUTH OVER COMFORT [RULE 001] <span class="active-rule">[ACTIVE]</span>
+        </div>
+      </div>
+      <a class="sign-out-link" id="signOutLink" style="display:none;">SIGN OUT</a>
+    </header>
+
+    <aside class="provenance-panel">
+      <div class="panel-header">
+        <div class="panel-title">Provenance Stream</div>
+        <div class="panel-subtitle">Memory Verification &amp; Source Tracking</div>
+      </div>
+      <div class="panel-body" id="memoryList">
+        <div class="empty-state">Loading memories…</div>
+      </div>
+    </aside>
+
+    <main class="neural-center">
+      <canvas id="orbCanvas"></canvas>
+    </main>
+
+    <aside class="pulse-panel">
+      <div class="panel-header">
+        <div class="panel-title">Cognitive Pulse</div>
+        <div class="panel-subtitle">Live System Events</div>
+      </div>
+      <div class="panel-body" id="pulseList">
+        <div class="empty-state">No live events.</div>
+      </div>
+    </aside>
+
+    <section class="conversation-panel">
+      <div class="mode-row" id="modeRow">
+        <span class="mode-label">TONE</span>
+        <button type="button" class="mode-pill" id="modeHome">HOME</button>
+        <button type="button" class="mode-pill" id="modeWork">WORK</button>
+        <span class="mode-label">·</span>
+        <button type="button" class="mode-pill" id="modeList">LIST</button>
+        <button type="button" class="mode-pill" id="modeGrammar">GRAMMAR</button>
+      </div>
+      <div class="response-bubble" id="responseBubble"></div>
+      <div class="input-bar">
+        <input type="text" class="message-input" id="messageInput" placeholder="Ask Zion anything…" autocomplete="off">
+        <div class="input-controls">
+          <button class="control-btn send-btn" id="sendButton" type="button" disabled>SEND</button>
+          <button class="control-btn" id="micButton" type="button" aria-pressed="false">MIC</button>
+          <button class="control-btn" id="voiceButton" type="button" aria-pressed="false">SPEAK</button>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <div class="login-overlay hidden" id="loginOverlay">
+    <div class="login-card">
+      <div class="login-wordmark">ZION · THE POWERFUL AI</div>
+      <div class="login-label">Tiff, sign in</div>
+      <form id="loginForm">
+        <input type="email" class="login-input" id="emailInput" placeholder="Email address" required autocomplete="email">
+        <input type="password" class="login-input" id="passwordInput" placeholder="Password" required autocomplete="current-password">
+        <button type="submit" class="login-btn" id="loginButton">SIGN IN</button>
+      </form>
+      <div id="loginMessage"></div>
+    </div>
+  </div>
+
+  <!-- Supabase client (CDN; subject to CSP allowlist in server.js) -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+  <script>
+    // ─────────────────────────────────────────────────────────────────
+    // Auth + fetch wrapper
+    // ─────────────────────────────────────────────────────────────────
+    const { createClient } = window.supabase;
+    const zionSupabase = createClient('__SUPABASE_URL__', '__SUPABASE_ANON_KEY__', {
+      auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true }
+    });
+
+    async function zionFetch(url, options = {}) {
+      const { data: { session } } = await zionSupabase.auth.getSession();
+      if (!session) { showLoginOverlay(); throw new Error('Authentication required'); }
+      const headers = new Headers(options.headers || {});
+      headers.set('Authorization', `Bearer ${session.access_token}`);
+      if (!(options.body instanceof FormData) && !headers.has('Content-Type')) {
+        headers.set('Content-Type', 'application/json');
+      }
+      let response = await fetch(url, { ...options, headers });
+      if (response.status === 401) {
+        const { data: { session: nu } } = await zionSupabase.auth.refreshSession();
+        if (nu) {
+          headers.set('Authorization', `Bearer ${nu.access_token}`);
+          response = await fetch(url, { ...options, headers });
+        }
+        if (response.status === 401) {
+          await zionSupabase.auth.signOut();
+          window.location.reload();
+          return;
+        }
+      }
+      return response;
+    }
+
+    const $ = id => document.getElementById(id);
+
+    function showLoginOverlay() {
+      $('loginOverlay').classList.remove('hidden');
+      $('signOutLink').style.display = 'none';
+    }
+    function hideLoginOverlay() {
+      $('loginOverlay').classList.add('hidden');
+      $('signOutLink').style.display = 'block';
+    }
+    function showLoginMessage(text, kind = 'error') {
+      $('loginMessage').innerHTML = `<div class="login-message ${kind}">${text}</div>`;
+    }
+    function escapeHtml(s) {
+      return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({
+        '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+      })[c]);
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    // Version badge
+    // ─────────────────────────────────────────────────────────────────
+    async function loadVersion() {
+      try {
+        const res = await fetch('/version');
+        if (!res.ok) throw new Error('not ok');
+        const data = await res.json();
+        $('versionBadge').textContent = `Zion v${data.version}`;
+      } catch (_) {
+        $('versionBadge').textContent = 'Zion v?';
+      }
+    }
+    loadVersion();
+
+    // ─────────────────────────────────────────────────────────────────
+    // Tiff mode toggles (tone home/work, list mode, grammar mode)
+    // Server holds the truth — UI just renders + POSTs partial updates.
+    // ─────────────────────────────────────────────────────────────────
+    let modes = { tone: 'home', list_mode: false, grammar: false };
+
+    function renderModes() {
+      $('modeHome').classList.toggle('active', modes.tone === 'home');
+      $('modeWork').classList.toggle('active', modes.tone === 'work');
+      $('modeList').classList.toggle('active', !!modes.list_mode);
+      $('modeGrammar').classList.toggle('active', !!modes.grammar);
+    }
+    async function fetchModes() {
+      try {
+        const res = await zionFetch('/api/tiff/modes');
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data && data.modes) { modes = data.modes; renderModes(); }
+      } catch (_) {}
+    }
+    async function patchModes(partial) {
+      try {
+        const res = await zionFetch('/api/tiff/modes', {
+          method: 'POST',
+          body: JSON.stringify(partial)
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data && data.modes) { modes = data.modes; renderModes(); }
+        }
+      } catch (_) {}
+    }
+    $('modeHome').addEventListener('click',    () => patchModes({ tone: 'home' }));
+    $('modeWork').addEventListener('click',    () => patchModes({ tone: 'work' }));
+    $('modeList').addEventListener('click',    () => patchModes({ list_mode: !modes.list_mode }));
+    $('modeGrammar').addEventListener('click', () => patchModes({ grammar:   !modes.grammar }));
+
+    // ─────────────────────────────────────────────────────────────────
+    // Memory panel (Provenance Stream)
+    // ─────────────────────────────────────────────────────────────────
+    async function fetchMemories() {
+      try {
+        const { data: { session } } = await zionSupabase.auth.getSession();
+        if (!session) return;
+        const res = await zionFetch(`/api/memory/${session.user.id}`);
+        if (!res.ok) { renderMemories([]); return; }
+        const data = await res.json();
+        renderMemories(Array.isArray(data.memories) ? data.memories : []);
+      } catch (_) { renderMemories([]); }
+    }
+    function renderMemories(memories) {
+      const el = $('memoryList');
+      if (!memories.length) {
+        el.innerHTML = '<div class="empty-state">No memories yet. Talk to me and I\'ll remember.</div>';
+        return;
+      }
+      el.innerHTML = memories.slice(0, 14).map(m => {
+        const date = (m.date || '').slice(0, 10);
+        return `<div class="memory-card">
+          <div class="memory-header"><span>Memory</span><span class="ref">${escapeHtml(m.type || '')}</span></div>
+          <div class="memory-content">${escapeHtml(m.content || '')}</div>
+          ${date ? `<div class="memory-meta">Recorded: ${escapeHtml(date)}</div>` : ''}
+        </div>`;
+      }).join('');
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    // Orb state machine + canvas
+    // States: idle / listening / streaming / speaking / thinking / fault
+    // Audio level (window.__voiceLevel) drives the speaking-state pulse.
+    // ─────────────────────────────────────────────────────────────────
+    const STATE_COLORS = {
+      idle:      { primary: '#4FB8C9', glow: 'rgba(79, 184, 201, 0.55)' },
+      listening: { primary: '#39ff14', glow: 'rgba(57, 255, 20, 0.55)'  },
+      streaming: { primary: '#00BFC4', glow: 'rgba(0, 191, 196, 0.55)'  },
+      speaking:  { primary: '#00E5FF', glow: 'rgba(0, 229, 255, 0.65)'  },
+      thinking:  { primary: '#FFD166', glow: 'rgba(255, 209, 102, 0.55)'},
+      fault:     { primary: '#FF5C5C', glow: 'rgba(255, 92, 92, 0.6)'   }
+    };
+    let orbState = 'idle';
+    window.__voiceLevel = 0;
+    function setOrbState(s) { if (STATE_COLORS[s]) orbState = s; }
+
+    const canvas = $('orbCanvas');
+    const ctx = canvas.getContext('2d');
+    function resizeCanvas() {
+      const dpr = window.devicePixelRatio || 1;
+      const w = canvas.clientWidth, h = canvas.clientHeight;
+      canvas.width = w * dpr; canvas.height = h * dpr;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+    window.addEventListener('resize', resizeCanvas);
+
+    let t0 = performance.now();
+    function frame() {
+      const w = canvas.clientWidth, h = canvas.clientHeight;
+      if (!w || !h) { requestAnimationFrame(frame); return; }
+      ctx.clearRect(0, 0, w, h);
+      const cx = w / 2, cy = h / 2;
+      const t = (performance.now() - t0) / 1000;
+      const palette = STATE_COLORS[orbState] || STATE_COLORS.idle;
+      const speedMul = orbState === 'speaking' ? (1 + window.__voiceLevel * 1.5)
+                     : orbState === 'listening' ? 1.6
+                     : orbState === 'streaming' ? 1.3
+                     : orbState === 'thinking'  ? 1.1
+                     : orbState === 'fault'     ? 0.5
+                     : 1.0;
+      const baseRadius = Math.min(w, h) * 0.18;
+      const breath = Math.sin(t * 1.4 * speedMul) * 0.06;
+      const voicePulse = orbState === 'speaking' ? window.__voiceLevel * 0.25 : 0;
+      const r = baseRadius * (1 + breath + voicePulse);
+
+      // outer glow
+      const glow = ctx.createRadialGradient(cx, cy, r * 0.3, cx, cy, r * 2.6);
+      glow.addColorStop(0, palette.glow);
+      glow.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = glow;
+      ctx.fillRect(0, 0, w, h);
+
+      // rings (3 concentric, slight rotation)
+      for (let i = 0; i < 3; i++) {
+        const ringR = r * (1.15 + i * 0.35) + Math.sin(t * 0.9 + i) * 4;
+        ctx.beginPath();
+        ctx.arc(cx, cy, ringR, 0, Math.PI * 2);
+        ctx.strokeStyle = palette.primary;
+        ctx.globalAlpha = 0.30 - i * 0.08;
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+
+      // core
+      const core = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
+      core.addColorStop(0, palette.primary);
+      core.addColorStop(0.7, palette.primary + (orbState === 'speaking' ? 'cc' : '88'));
+      core.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = core;
+      ctx.beginPath();
+      ctx.arc(cx, cy, r, 0, Math.PI * 2);
+      ctx.fill();
+
+      requestAnimationFrame(frame);
+    }
+    resizeCanvas();
+    requestAnimationFrame(frame);
+
+    // ─────────────────────────────────────────────────────────────────
+    // Voice (TTS via /api/voice/speak) + audio-reactive level
+    // ─────────────────────────────────────────────────────────────────
+    let voiceEnabled = false;
+    let audioCtx = null, analyser = null, freqData = null;
+    let currentSource = null, rafId = null;
+
+    function getAudioCtx() {
+      if (!audioCtx) {
+        const AC = window.AudioContext || window.webkitAudioContext;
+        audioCtx = new AC();
+        analyser = audioCtx.createAnalyser();
+        analyser.fftSize = 256;
+        analyser.smoothingTimeConstant = 0.65;
+        freqData = new Uint8Array(analyser.frequencyBinCount);
+      }
+      return audioCtx;
+    }
+    function stopAudio() {
+      if (currentSource) {
+        try { currentSource.stop(); } catch (_) {}
+        try { currentSource.disconnect(); } catch (_) {}
+        currentSource = null;
+      }
+      if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
+      window.__voiceLevel = 0;
+      if (orbState === 'speaking') setOrbState('idle');
+    }
+    function tickFromAudio() {
+      if (!analyser) return;
+      analyser.getByteFrequencyData(freqData);
+      let sum = 0; const start = 2, end = Math.min(freqData.length, 48);
+      for (let i = start; i < end; i++) sum += freqData[i];
+      window.__voiceLevel = Math.min(1, (sum / (end - start)) / 110);
+      rafId = requestAnimationFrame(tickFromAudio);
+    }
+    function b64ToBuffer(b64) {
+      const bin = atob(b64);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      return bytes.buffer;
+    }
+    async function speak(text) {
+      if (!voiceEnabled || !text) return;
+      try {
+        const res = await zionFetch('/api/voice/speak', {
+          method: 'POST',
+          body: JSON.stringify({ text })
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!data.audio) {
+          if ('speechSynthesis' in window) {
+            const u = new SpeechSynthesisUtterance(text);
+            u.rate = 1.0; speechSynthesis.speak(u);
+          }
+          return;
+        }
+        const ctxA = getAudioCtx();
+        if (ctxA.state === 'suspended') await ctxA.resume();
+        const buf = await ctxA.decodeAudioData(b64ToBuffer(data.audio));
+        stopAudio();
+        const src = ctxA.createBufferSource();
+        src.buffer = buf;
+        src.connect(analyser);
+        src.connect(ctxA.destination);
+        src.onended = () => { if (currentSource === src) stopAudio(); };
+        currentSource = src;
+        setOrbState('speaking');
+        src.start(0);
+        tickFromAudio();
+      } catch (err) {
+        console.warn('voice failed', err);
+      }
+    }
+    $('voiceButton').addEventListener('click', () => {
+      voiceEnabled = !voiceEnabled;
+      $('voiceButton').classList.toggle('active', voiceEnabled);
+      $('voiceButton').setAttribute('aria-pressed', String(voiceEnabled));
+      if (!voiceEnabled) stopAudio();
+      else { try { getAudioCtx().resume(); } catch (_) {} }
+    });
+
+    // ─────────────────────────────────────────────────────────────────
+    // Mic (browser SpeechRecognition for STT). Falls back silently
+    // if the browser doesn't support it.
+    // ─────────────────────────────────────────────────────────────────
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    let recognizer = null, recognizing = false;
+    if (SR) {
+      recognizer = new SR();
+      recognizer.lang = 'en-US';
+      recognizer.interimResults = false;
+      recognizer.maxAlternatives = 1;
+      recognizer.onresult = (e) => {
+        const transcript = e.results[0][0].transcript;
+        $('messageInput').value = transcript;
+        $('sendButton').disabled = !transcript.trim();
+        sendMessage();
+      };
+      recognizer.onend = () => {
+        recognizing = false;
+        $('micButton').classList.remove('active');
+        $('micButton').setAttribute('aria-pressed', 'false');
+        if (orbState === 'listening') setOrbState('idle');
+      };
+      recognizer.onerror = () => { recognizer.onend(); };
+    } else {
+      $('micButton').disabled = true;
+      $('micButton').title = 'Speech recognition not supported by this browser';
+    }
+    $('micButton').addEventListener('click', () => {
+      if (!recognizer) return;
+      if (recognizing) { recognizer.stop(); return; }
+      try {
+        recognizer.start();
+        recognizing = true;
+        $('micButton').classList.add('active');
+        $('micButton').setAttribute('aria-pressed', 'true');
+        setOrbState('listening');
+      } catch (_) {}
+    });
+
+    // ─────────────────────────────────────────────────────────────────
+    // Chat (streaming)
+    // ─────────────────────────────────────────────────────────────────
+    const inputEl = $('messageInput');
+    const sendBtn = $('sendButton');
+    const bubble = $('responseBubble');
+
+    inputEl.addEventListener('input', () => {
+      sendBtn.disabled = !inputEl.value.trim();
+    });
+    inputEl.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        if (!sendBtn.disabled) sendMessage();
+      }
+    });
+    sendBtn.addEventListener('click', () => { if (!sendBtn.disabled) sendMessage(); });
+
+    async function sendMessage() {
+      const text = inputEl.value.trim();
+      if (!text) return;
+      inputEl.value = '';
+      sendBtn.disabled = true;
+      bubble.textContent = '';
+      setOrbState('streaming');
+
+      try {
+        const { data: { session } } = await zionSupabase.auth.getSession();
+        if (!session) { showLoginOverlay(); return; }
+        const response = await fetch('/api/chat/stream', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${session.access_token}`
+          },
+          body: JSON.stringify({ message: text })
+        });
+        if (!response.ok) {
+          setOrbState('fault');
+          bubble.textContent = `Error: ${response.status}`;
+          setTimeout(() => setOrbState('idle'), 2000);
+          return;
+        }
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '', full = '';
+        let modesFromServer = null;
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || '';
+          for (const line of lines) {
+            if (!line.startsWith('data: ')) continue;
+            const payload = line.slice(6).trim();
+            if (payload === '[DONE]') continue;
+            try {
+              const evt = JSON.parse(payload);
+              if (evt.type === 'token' && evt.text) {
+                full += evt.text;
+                bubble.textContent = full;
+                bubble.scrollTop = bubble.scrollHeight;
+              } else if (evt.type === 'done') {
+                if (evt.full_response) { full = evt.full_response; bubble.textContent = full; }
+                if (evt.modes) modesFromServer = evt.modes;
+              } else if (evt.type === 'error') {
+                bubble.textContent = `Error: ${evt.message || 'unknown'}`;
+                setOrbState('fault');
+              }
+            } catch (_) {}
+          }
+        }
+        if (modesFromServer) { modes = modesFromServer; renderModes(); }
+        if (voiceEnabled && full) {
+          speak(full);
+        } else {
+          setOrbState('idle');
+        }
+        // refresh provenance panel after a turn
+        fetchMemories();
+      } catch (err) {
+        console.warn('chat failed', err);
+        bubble.textContent = `Error: ${err.message}`;
+        setOrbState('fault');
+        setTimeout(() => setOrbState('idle'), 2000);
+      } finally {
+        sendBtn.disabled = !inputEl.value.trim();
+      }
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    // Auth flow
+    // ─────────────────────────────────────────────────────────────────
+    async function checkAuthState() {
+      const { data: { session } } = await zionSupabase.auth.getSession();
+      if (!session) { showLoginOverlay(); return false; }
+      try {
+        const test = await zionFetch(`/api/memory/${session.user.id}`);
+        if (test.status === 403) {
+          await zionSupabase.auth.signOut();
+          showLoginOverlay();
+          showLoginMessage('Access denied. Owner only.', 'error');
+          return false;
+        }
+        if (!test.ok && test.status !== 404) {
+          showLoginOverlay();
+          return false;
+        }
+        hideLoginOverlay();
+        fetchModes();
+        fetchMemories();
+        return true;
+      } catch (_) {
+        showLoginOverlay();
+        return false;
+      }
+    }
+
+    $('loginForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const email = $('emailInput').value;
+      const password = $('passwordInput').value;
+      const btn = $('loginButton');
+      btn.disabled = true; btn.textContent = 'SIGNING IN…';
+      $('loginMessage').innerHTML = '';
+      try {
+        const { error } = await zionSupabase.auth.signInWithPassword({ email, password });
+        if (error) throw error;
+        const ok = await checkAuthState();
+        if (ok) showLoginMessage('Welcome back, Tiff.', 'success');
+      } catch (err) {
+        showLoginMessage(err.message || 'Sign in failed.', 'error');
+      } finally {
+        btn.disabled = false; btn.textContent = 'SIGN IN';
+      }
+    });
+
+    $('signOutLink').addEventListener('click', async (e) => {
+      e.preventDefault();
+      await zionSupabase.auth.signOut();
+      window.location.reload();
+    });
+
+    checkAuthState();
+
+    // Service worker (cache-bust on every deploy via /version)
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/sw.js').catch(() => {});
+    }
+  </script>
+</body>
+</html>

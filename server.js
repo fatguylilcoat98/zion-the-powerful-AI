@@ -11,18 +11,17 @@ const path = require('path');
 const fs = require('fs');
 require('dotenv').config();
 
-// Cached oracle interface HTML with Supabase config injected at startup.
-// Mirrors Splendor's pattern: __SUPABASE_URL__ / __SUPABASE_ANON_KEY__
-// placeholders get substituted once on boot so the browser bundle can
-// read them without a runtime call.
-let cachedOracleHtml = null;
+// Cached HTML with Supabase config injected at startup.
+// Mirrors Splendor's __SUPABASE_URL__ / __SUPABASE_ANON_KEY__ pattern
+// so the browser bundle reads config without a runtime call.
+let cachedZionHtml = null;
 
-function loadOracleHtml() {
+function loadZionHtml() {
   const raw = fs.readFileSync(
-    path.join(__dirname, 'public/oracle-interface.html'),
+    path.join(__dirname, 'public/zion-interface.html'),
     'utf8'
   );
-  cachedOracleHtml = raw
+  cachedZionHtml = raw
     .replace(/__SUPABASE_URL__/g, process.env.SUPABASE_URL || '')
     .replace(/__SUPABASE_ANON_KEY__/g, process.env.SUPABASE_ANON_KEY || '');
 
@@ -37,7 +36,7 @@ const voiceRoutes = require('./routes/voice');
 const authRoutes = require('./routes/auth');
 const tiffRoutes = require('./routes/tiff');
 
-loadOracleHtml();
+loadZionHtml();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -46,7 +45,9 @@ app.use(helmet({
   contentSecurityPolicy: {
     directives: {
       defaultSrc: ["'self'"],
-      scriptSrc: ["'self'", "'unsafe-inline'"],
+      // 'unsafe-inline' for the page's inline orb/chat/voice wiring;
+      // cdn.jsdelivr.net so the @supabase/supabase-js UMD bundle loads.
+      scriptSrc: ["'self'", "'unsafe-inline'", "https://cdn.jsdelivr.net"],
       styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
       fontSrc: ["'self'", "https://fonts.gstatic.com"],
       connectSrc: ["'self'", process.env.SUPABASE_URL, "https://api.anthropic.com", "https://api.openai.com", "https://api.tavily.com"].filter(Boolean),
@@ -97,10 +98,10 @@ app.get('/version', (req, res) => {
   });
 });
 
-// Oracle interface is the only UI surface.
+// Zion interface is the only UI surface.
 app.get('*', (req, res) => {
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
-  res.send(cachedOracleHtml);
+  res.send(cachedZionHtml);
 });
 
 app.use((err, req, res, next) => {
