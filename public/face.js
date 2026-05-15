@@ -76,8 +76,9 @@
       fetch('/zion-particle-data-1.json' + cb).then(r => { if (!r.ok) throw new Error('part1 ' + r.status); return r.json(); }),
       fetch('/zion-particle-data-2.json' + cb).then(r => { if (!r.ok) throw new Error('part2 ' + r.status); return r.json(); }),
       fetch('/zion-particle-data-3.json' + cb).then(r => { if (!r.ok) throw new Error('part3 ' + r.status); return r.json(); }),
-    ]).then(([meta, a, b, c]) => {
-      const all = a.concat(b, c);
+      fetch('/zion-particle-data-4.json' + cb).then(r => { if (!r.ok) throw new Error('part4 ' + r.status); return r.json(); }),
+    ]).then(([meta, a, b, c, d]) => {
+      const all = a.concat(b, c, d);
       const n = all.length;
       const imgW = meta.bbox.w, imgH = meta.bbox.h;
       const cxImg = imgW * 0.5;
