@@ -69,16 +69,15 @@
     // Cache-buster — Render's CDN / browser HTTP cache was holding onto an
     // older copy of the data files past a deploy. Bump this on every data
     // change so clients always pull the fresh stipple.
-    const cb = '?v=v14';
+    const cb = '?v=v15';
     let particles = null;
     Promise.all([
       fetch('/zion-particle-meta.json' + cb).then(r => { if (!r.ok) throw new Error('meta ' + r.status); return r.json(); }),
       fetch('/zion-particle-data-1.json' + cb).then(r => { if (!r.ok) throw new Error('part1 ' + r.status); return r.json(); }),
       fetch('/zion-particle-data-2.json' + cb).then(r => { if (!r.ok) throw new Error('part2 ' + r.status); return r.json(); }),
       fetch('/zion-particle-data-3.json' + cb).then(r => { if (!r.ok) throw new Error('part3 ' + r.status); return r.json(); }),
-      fetch('/zion-particle-data-4.json' + cb).then(r => { if (!r.ok) throw new Error('part4 ' + r.status); return r.json(); }),
-    ]).then(([meta, a, b, c, d]) => {
-      const all = a.concat(b, c, d);
+    ]).then(([meta, a, b, c]) => {
+      const all = a.concat(b, c);
       const n = all.length;
       const imgW = meta.bbox.w, imgH = meta.bbox.h;
       const cxImg = imgW * 0.5;
@@ -192,11 +191,11 @@
       const imgW = particles.imgW, imgH = particles.imgH;
       const cxImg = particles.cxImg, cyImg = particles.cyImg;
 
-      // Canvas projection: face much smaller to show COMPLETE mouth including chin
-      const padding = 0.55; // Much smaller - was 0.75, now 0.55
+      // Canvas projection: face centroid at canvas center, scaled to fit.
+      const padding = 0.95;
       const scale = Math.min(w / imgW, h / imgH) * padding;
       const cX = w * 0.5;
-      const cY = h * 0.35; // Moved much higher to show bottom lip and chin
+      const cY = h * 0.5;
 
       // Scatter ring sized to the canvas: dots arrive from somewhere
       // between the face envelope (~half the smaller canvas dim) and the
@@ -224,10 +223,10 @@
       // talking-activity signal, not a per-phoneme tracker.
       smoothedVoice = smoothedVoice * 0.88 + voice * 0.12;
       const tSec = now * 0.001;
-      // Natural talking head movement — like a real human conversation
-      const headBob = smoothedVoice * 8.0; // Natural head nod
-      const headTilt = Math.sin(tSec * 1.3) * smoothedVoice * 3.0; // Subtle head tilt
-      const headSway = Math.cos(tSec * 0.7) * voice * 2.0; // Side-to-side movement
+      // Head bob — uniform Y translation of the whole face. Dips down while
+      // Zion is actively talking, eases back when quiet. Reads as a person
+      // nodding into their words, not a particle wave.
+      const headBob = smoothedVoice * 7.0;
 
       // Live-state idle motion — keeps the whole face alive when quiet.
       // The talking motion (jaw drop / lip split / lower-face shimmer) is
@@ -235,7 +234,6 @@
       // stays still when Zion speaks (otherwise the whole face waves).
       const orbOmega = 2 * Math.PI * 0.4;
       const orbPhase = tSec * orbOmega;
-      const sylPhase = tSec * 2 * Math.PI * 6.0; // ~6 Hz phoneme rate
       const idleAmp = 2.5;
       // Breath: subtle wobble only — no voice-driven inflation (it was
       // pumping the whole face on each word, contributing to the wave look).
@@ -261,90 +259,50 @@
         // then project through the breath-scaled (sX, sY) at draw time.
         // Stash image-space positions; pass 2 projects them.
         const imgHinv = 1 / imgH;
-        // Facial region definitions based on ACTUAL face reference image
-        const LIP_Y = 0.85;           // Actual mouth location (lower on face)
-        const LIP_HALF = 0.06;        // Mouth region half-height
-        const JAW_START = 0.75;       // Jaw starts just below mouth
-        const JAW_SPAN  = 1.0 - JAW_START;
-
-        // Corrected facial regions for enhanced expressions
-        const EYE_Y = 0.45;           // Eyes - middle upper area
-        const EYE_HALF = 0.05;        // Eye region half-height
-        const EYEBROW_Y = 0.35;       // Eyebrows - above eyes
-        const EYEBROW_HALF = 0.04;    // Eyebrow region half-height
-        const CHEEK_Y = 0.65;         // Cheeks - between eyes and mouth
-        const CHEEK_HALF = 0.08;      // Cheek region half-height
-        const FOREHEAD_Y = 0.25;      // Forehead - upper area
+        const halfW = imgW * 0.5;
+        // Real, proportional mouth + jaw. A central-column influence
+        // (Gaussian in x) keeps the motion on the mouth/jaw and tapers it
+        // to nothing at the cheeks and face edges — so no full-width bar.
+        // A smooth sin-eased vertical profile gives a clean opening with
+        // no banding — so no bright square. No eye/brow/cheek/forehead
+        // overlays; just a mouth that opens like a mouth.
+        const UPPER_LIP_N = 0.70;  // y_norm where the opening starts
+        const CHIN_N      = 0.99;  // y_norm at the bottom of the jaw
+        const LIP_Y       = 0.74;  // upper-lip lift center
+        const SPAN        = CHIN_N - UPPER_LIP_N;
         for (let i = 0; i < n; i++) {
           // Idle breathing — every dot, voice-independent
           const idleDx = idleAmp * Math.sin(orbPhase + phA[i]);
           const idleDy = idleAmp * Math.sin(orbPhase + phB[i]);
 
           const yNorm = ys[i] * imgHinv;
+          const xRel = (xs[i] - halfW) / halfW; // -1..1 across the face
+          // Central-column weight: ~1 at the midline, ~0.03 at the edges.
+          // This is what stops the cheeks / jaw-sides forming a bar.
+          const hw = Math.exp(-xRel * xRel * 3.4);
 
-          // Jaw drop — VISIBLE jaw movement targeting ACTUAL jaw area
-          // Voice-scaled. The lower the dot, the more it drops, like a
-          // jaw rotating around the temporomandibular axis.
-          const jawIntensity = yNorm > JAW_START ? (yNorm - JAW_START) / JAW_SPAN : 0;
-          const jawDrop = voice * 12 * jawIntensity; // Strong but controlled jaw movement
+          // Jaw / lower-lip opening: zero above the upper lip, smoothly
+          // rising (sin ease) to a max near the chin. No hard band.
+          let jawOpen = 0;
+          if (yNorm > UPPER_LIP_N) {
+            const tt = Math.min(1, (yNorm - UPPER_LIP_N) / SPAN);
+            jawOpen = voice * 16 * hw * Math.sin(tt * Math.PI * 0.5);
+          }
 
-          // Lip split — CLEAR lip movement targeting ACTUAL mouth area
-          // No abrupt crossover at the center (which read as a sharp line);
-          // instead dots near the center barely move, mid-band displaces
-          // most, edges return to zero — like the soft motion of parting lips.
-          const lipDist = yNorm - LIP_Y;
-          const lipKernel = Math.max(0, 1 - Math.abs(lipDist) / LIP_HALF);
-          const lipSplit = voice * 6 * lipKernel * Math.sin(lipDist * Math.PI / LIP_HALF); // Visible lip movement
-
-          // Phoneme shimmer — fast wobble, scoped to the lower face so the
-          // upper face stays still. Drives the per-syllable detail.
-          const shimX = voice * 1.4 * jawIntensity * Math.sin(sylPhase + phA[i] * 1.7);
-          const shimY = voice * 1.4 * jawIntensity * Math.sin(sylPhase + phB[i] * 1.7);
-
-          // ═══ ENHANCED HUMAN FACIAL EXPRESSIONS ═══
-
-          // Expression coordination phases for natural movement
-          const expressionPhase = tSec * 2.1 + phA[i] * 0.6; // Main expression rhythm
-          const speechIntensity = voice * (0.8 + 0.4 * Math.sin(tSec * 3.7)); // Variable speech intensity
-
-          // Eye expressions — CLEAR blinking and eye movement at ACTUAL eye location
-          const eyeDist = Math.abs(yNorm - EYE_Y);
-          const eyeKernel = Math.max(0, 1 - eyeDist / EYE_HALF);
-          const blinkPhase = Math.sin(tSec * 3.2 + phA[i] * 0.8) * 0.5 + 0.5; // Slow blinks
-          const speechBlink = speechIntensity * 15 * eyeKernel * Math.sin(blinkPhase * Math.PI); // Clear but not extreme
-          const eyeSquint = speechIntensity * 8 * eyeKernel * Math.sin(expressionPhase + i * 0.3); // Visible squinting
-
-          // Eyebrow expressions — CLEAR raise during speech at ACTUAL eyebrow location
-          const browDist = Math.abs(yNorm - EYEBROW_Y);
-          const browKernel = Math.max(0, 1 - browDist / EYEBROW_HALF);
-          const browRaise = voice * 12 * browKernel * Math.sin(tSec * 2.8 + phA[i] * 1.2) * -1; // Negative = up
-          const browFurrow = smoothedVoice * 6 * browKernel * Math.sin(tSec * 1.9 + i * 0.15); // Controlled movement
-
-          // Cheek expressions — DRAMATIC smile dynamics, cheek movement
-          const cheekDist = Math.abs(yNorm - CHEEK_Y);
-          const cheekKernel = Math.max(0, 1 - cheekDist / CHEEK_HALF);
-          const cheekLift = voice * 5 * cheekKernel * Math.sin(tSec * 3.5 + phA[i] * 1.1) * -0.6; // Major smile lift
-          const cheekPuff = smoothedVoice * 3 * cheekKernel * Math.sin(tSec * 2.1 + i * 0.4); // Strong cheek puffing
-
-          // Forehead expressions — DRAMATIC wrinkles and tension
-          const foreheadKernel = yNorm < FOREHEAD_Y ? (1 - yNorm / FOREHEAD_Y) : 0;
-          const foreheadTension = voice * 10 * foreheadKernel * Math.sin(tSec * 1.6 + phA[i] * 0.7); // 5x stronger
-
-          // Enhanced mouth expressions — DRAMATIC curvature and movement
-          const mouthCurvature = voice * 4 * lipKernel * Math.sin(tSec * 4.2 + xs[i] * 0.01); // Strong smile curvature
-          const mouthTwist = smoothedVoice * 2 * lipKernel * Math.cos(tSec * 3.1 + i * 0.25); // Pronounced asymmetry
+          // Upper-lip lift — small upward motion in a narrow band just
+          // above the lip line, central column only.
+          const ulDist = yNorm - LIP_Y;
+          const ulKernel = Math.max(0, 1 - Math.abs(ulDist) / 0.045);
+          const upperLip = (yNorm < LIP_Y) ? -voice * 4 * hw * ulKernel : 0;
 
           // Whole-face liveliness shimmer — INCOHERENT (phase seeded by
-          // index, not by spatial position). Adjacent dots don't move
-          // together, so no diagonal wave streaks. Very low amplitude so
-          // it reads as "the surface is alive" not "particles are jittering".
-          const liveX = smoothedVoice * 1.2 * Math.sin(tSec * 9.3 + i * 0.71);
-          const liveY = smoothedVoice * 1.2 * Math.cos(tSec * 9.1 + i * 0.91);
+          // index, not spatial position) so neighbors don't move together:
+          // no diagonal wave streaks. Subtle.
+          const liveX = smoothedVoice * 1.0 * Math.sin(tSec * 9.3 + i * 0.71);
+          const liveY = smoothedVoice * 1.0 * Math.cos(tSec * 9.1 + i * 0.91);
 
-          // Combine all facial expressions for natural human-like movement + head movement
-          const imgX = xs[i] + idleDx + shimX + liveX + browFurrow + cheekPuff + mouthTwist + headSway;
-          const imgY = ys[i] + idleDy + jawDrop + lipSplit + shimY + headBob + headTilt + liveY
-                       + speechBlink + eyeSquint + browRaise + cheekLift + foreheadTension + mouthCurvature;
+          const imgX = xs[i] + idleDx + liveX;
+          const imgY = ys[i] + idleDy + jawOpen + upperLip + headBob + liveY;
           pxArr[i] = cX + (imgX - cxImg) * sX;
           pyArr[i] = cY + (imgY - cyImg) * sY;
         }
@@ -370,11 +328,10 @@
         }
       }
 
-      // Pass 2: bucketed draws WITH MOUTH OPENING
+      // Pass 2: bucketed draws
       const dpr = window.devicePixelRatio || 1;
       const pSize = Math.max(1.0, 1.4); // 1.4 css px regardless of dpr
       const half = pSize * 0.5;
-
 
       ctx.save();
       ctx.globalCompositeOperation = 'lighter';
@@ -388,15 +345,10 @@
         for (let i = 0; i < n; i++) {
           const b = bs[i];
           if (b < bMin || b >= bMax) continue;
-
-          const px = pxArr[i];
-          const py = pyArr[i];
-          ctx.fillRect(px - half, py - half, pSize, pSize);
+          ctx.fillRect(pxArr[i] - half, pyArr[i] - half, pSize, pSize);
         }
       }
       ctx.restore();
-
-
 
       requestAnimationFrame(frame);
     }
