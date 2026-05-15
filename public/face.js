@@ -285,7 +285,7 @@
           // Voice-scaled. The lower the dot, the more it drops, like a
           // jaw rotating around the temporomandibular axis.
           const jawIntensity = yNorm > JAW_START ? (yNorm - JAW_START) / JAW_SPAN : 0;
-          const jawDrop = voice * 35 * jawIntensity; // Strong but controlled jaw movement
+          const jawDrop = voice * 12 * jawIntensity; // Strong but controlled jaw movement
 
           // Lip split — CLEAR lip movement targeting ACTUAL mouth area
           // No abrupt crossover at the center (which read as a sharp line);
@@ -293,7 +293,7 @@
           // most, edges return to zero — like the soft motion of parting lips.
           const lipDist = yNorm - LIP_Y;
           const lipKernel = Math.max(0, 1 - Math.abs(lipDist) / LIP_HALF);
-          const lipSplit = voice * 18 * lipKernel * Math.sin(lipDist * Math.PI / LIP_HALF); // Visible lip movement
+          const lipSplit = voice * 6 * lipKernel * Math.sin(lipDist * Math.PI / LIP_HALF); // Visible lip movement
 
           // Phoneme shimmer — fast wobble, scoped to the lower face so the
           // upper face stays still. Drives the per-syllable detail.
@@ -322,16 +322,16 @@
           // Cheek expressions — DRAMATIC smile dynamics, cheek movement
           const cheekDist = Math.abs(yNorm - CHEEK_Y);
           const cheekKernel = Math.max(0, 1 - cheekDist / CHEEK_HALF);
-          const cheekLift = voice * 15 * cheekKernel * Math.sin(tSec * 3.5 + phA[i] * 1.1) * -0.8; // Major smile lift
-          const cheekPuff = smoothedVoice * 12 * cheekKernel * Math.sin(tSec * 2.1 + i * 0.4); // Strong cheek puffing
+          const cheekLift = voice * 5 * cheekKernel * Math.sin(tSec * 3.5 + phA[i] * 1.1) * -0.6; // Major smile lift
+          const cheekPuff = smoothedVoice * 3 * cheekKernel * Math.sin(tSec * 2.1 + i * 0.4); // Strong cheek puffing
 
           // Forehead expressions — DRAMATIC wrinkles and tension
           const foreheadKernel = yNorm < FOREHEAD_Y ? (1 - yNorm / FOREHEAD_Y) : 0;
           const foreheadTension = voice * 10 * foreheadKernel * Math.sin(tSec * 1.6 + phA[i] * 0.7); // 5x stronger
 
           // Enhanced mouth expressions — DRAMATIC curvature and movement
-          const mouthCurvature = voice * 18 * lipKernel * Math.sin(tSec * 4.2 + xs[i] * 0.01); // Strong smile curvature
-          const mouthTwist = smoothedVoice * 10 * lipKernel * Math.cos(tSec * 3.1 + i * 0.25); // Pronounced asymmetry
+          const mouthCurvature = voice * 4 * lipKernel * Math.sin(tSec * 4.2 + xs[i] * 0.01); // Strong smile curvature
+          const mouthTwist = smoothedVoice * 2 * lipKernel * Math.cos(tSec * 3.1 + i * 0.25); // Pronounced asymmetry
 
           // Whole-face liveliness shimmer — INCOHERENT (phase seeded by
           // index, not by spatial position). Adjacent dots don't move
@@ -374,11 +374,6 @@
       const pSize = Math.max(1.0, 1.4); // 1.4 css px regardless of dpr
       const half = pSize * 0.5;
 
-      // Calculate mouth opening area
-      const mouthCenterX = cX;
-      const mouthCenterY = cY + (0.15 * h); // Position mouth area
-      const mouthWidth = 30 + voice * 40; // Mouth opens wider during speech
-      const mouthHeight = 8 + voice * 15; // Mouth opens taller during speech
 
       ctx.save();
       ctx.globalCompositeOperation = 'lighter';
@@ -393,66 +388,13 @@
           const b = bs[i];
           if (b < bMin || b >= bMax) continue;
 
-          // CREATE MOUTH OPENING - skip particles in mouth area
           const px = pxArr[i];
           const py = pyArr[i];
-          const distFromMouthX = Math.abs(px - mouthCenterX);
-          const distFromMouthY = Math.abs(py - mouthCenterY);
-
-          // Skip particles inside mouth opening (creates actual mouth hole)
-          if (distFromMouthX < mouthWidth/2 && distFromMouthY < mouthHeight/2) {
-            continue; // Don't draw particle - creates mouth opening
-          }
-
           ctx.fillRect(px - half, py - half, pSize, pSize);
         }
       }
       ctx.restore();
 
-      // ═══ ADD DOT-BASED LIP AND CHIN FEATURES ═══
-      if (phaseKind === 'live') {
-        ctx.save();
-        ctx.globalAlpha = alpha;
-
-        // Create upper lip dots
-        const lipDots = 15;
-        const upperLipY = mouthCenterY - mouthHeight/2 - 5;
-        const lowerLipY = mouthCenterY + mouthHeight/2 + 5 + (voice * 8); // Jaw drop
-
-        ctx.fillStyle = 'rgba(0, 220, 240, 0.8)';
-
-        // Upper lip dots
-        for (let i = 0; i < lipDots; i++) {
-          const t = i / (lipDots - 1);
-          const angle = Math.PI * t; // Half circle for upper lip
-          const x = mouthCenterX + Math.cos(angle) * (mouthWidth/2);
-          const y = upperLipY + Math.sin(angle) * 8;
-          ctx.fillRect(x - 1, y - 1, 2, 2);
-        }
-
-        // Lower lip dots (with jaw movement)
-        ctx.fillStyle = 'rgba(0, 200, 230, 0.7)';
-        for (let i = 0; i < lipDots; i++) {
-          const t = i / (lipDots - 1);
-          const angle = Math.PI + (Math.PI * t); // Bottom half circle for lower lip
-          const x = mouthCenterX + Math.cos(angle) * (mouthWidth/2);
-          const y = lowerLipY - Math.sin(angle) * 6;
-          ctx.fillRect(x - 1, y - 1, 2, 2);
-        }
-
-        // Chin dots
-        const chinDots = 20;
-        const chinY = lowerLipY + 15;
-        ctx.fillStyle = 'rgba(0, 190, 220, 0.6)';
-        for (let i = 0; i < chinDots; i++) {
-          const t = (i / (chinDots - 1)) * 2 - 1; // -1 to 1
-          const x = mouthCenterX + t * (mouthWidth/1.5);
-          const y = chinY + Math.abs(t) * 8; // Curved chin line
-          ctx.fillRect(x - 1, y - 1, 2, 2);
-        }
-
-        ctx.restore();
-      }
 
 
       requestAnimationFrame(frame);
