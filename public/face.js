@@ -260,20 +260,20 @@
         // then project through the breath-scaled (sX, sY) at draw time.
         // Stash image-space positions; pass 2 projects them.
         const imgHinv = 1 / imgH;
-        // Facial region definitions for human-like expressions
-        const LIP_Y = 0.76;           // Lip/mouth band center
-        const LIP_HALF = 0.09;        // Half-width of lip band
-        const JAW_START = 0.57;       // Where jaw drop starts (below nose)
+        // Facial region definitions based on ACTUAL face reference image
+        const LIP_Y = 0.85;           // Actual mouth location (lower on face)
+        const LIP_HALF = 0.06;        // Mouth region half-height
+        const JAW_START = 0.75;       // Jaw starts just below mouth
         const JAW_SPAN  = 1.0 - JAW_START;
 
-        // New facial regions for enhanced expressions
-        const EYE_Y = 0.35;           // Eye region center
-        const EYE_HALF = 0.08;        // Eye region half-height
-        const EYEBROW_Y = 0.25;       // Eyebrow region
-        const EYEBROW_HALF = 0.06;    // Eyebrow region half-height
-        const CHEEK_Y = 0.55;         // Cheek region center
-        const CHEEK_HALF = 0.12;      // Cheek region half-height
-        const FOREHEAD_Y = 0.15;      // Forehead region
+        // Corrected facial regions for enhanced expressions
+        const EYE_Y = 0.45;           // Eyes - middle upper area
+        const EYE_HALF = 0.05;        // Eye region half-height
+        const EYEBROW_Y = 0.35;       // Eyebrows - above eyes
+        const EYEBROW_HALF = 0.04;    // Eyebrow region half-height
+        const CHEEK_Y = 0.65;         // Cheeks - between eyes and mouth
+        const CHEEK_HALF = 0.08;      // Cheek region half-height
+        const FOREHEAD_Y = 0.25;      // Forehead - upper area
         for (let i = 0; i < n; i++) {
           // Idle breathing — every dot, voice-independent
           const idleDx = idleAmp * Math.sin(orbPhase + phA[i]);
@@ -281,19 +281,19 @@
 
           const yNorm = ys[i] * imgHinv;
 
-          // Jaw drop — DRAMATIC jaw movement during speech
+          // Jaw drop — VISIBLE jaw movement targeting ACTUAL jaw area
           // Voice-scaled. The lower the dot, the more it drops, like a
           // jaw rotating around the temporomandibular axis.
           const jawIntensity = yNorm > JAW_START ? (yNorm - JAW_START) / JAW_SPAN : 0;
-          const jawDrop = voice * 45 * jawIntensity; // 1.5x stronger jaw movement
+          const jawDrop = voice * 35 * jawIntensity; // Strong but controlled jaw movement
 
-          // Lip split — DRAMATIC lip movement during speech
+          // Lip split — CLEAR lip movement targeting ACTUAL mouth area
           // No abrupt crossover at the center (which read as a sharp line);
           // instead dots near the center barely move, mid-band displaces
           // most, edges return to zero — like the soft motion of parting lips.
           const lipDist = yNorm - LIP_Y;
           const lipKernel = Math.max(0, 1 - Math.abs(lipDist) / LIP_HALF);
-          const lipSplit = voice * 22 * lipKernel * Math.sin(lipDist * Math.PI / LIP_HALF); // 2x stronger lip movement
+          const lipSplit = voice * 18 * lipKernel * Math.sin(lipDist * Math.PI / LIP_HALF); // Visible lip movement
 
           // Phoneme shimmer — fast wobble, scoped to the lower face so the
           // upper face stays still. Drives the per-syllable detail.
@@ -306,18 +306,18 @@
           const expressionPhase = tSec * 2.1 + phA[i] * 0.6; // Main expression rhythm
           const speechIntensity = voice * (0.8 + 0.4 * Math.sin(tSec * 3.7)); // Variable speech intensity
 
-          // Eye expressions — DRAMATIC blinking and eye movement during speech
+          // Eye expressions — CLEAR blinking and eye movement at ACTUAL eye location
           const eyeDist = Math.abs(yNorm - EYE_Y);
           const eyeKernel = Math.max(0, 1 - eyeDist / EYE_HALF);
           const blinkPhase = Math.sin(tSec * 3.2 + phA[i] * 0.8) * 0.5 + 0.5; // Slow blinks
-          const speechBlink = speechIntensity * 25 * eyeKernel * Math.sin(blinkPhase * Math.PI); // 3x stronger
-          const eyeSquint = speechIntensity * 12 * eyeKernel * Math.sin(expressionPhase + i * 0.3); // 4x stronger
+          const speechBlink = speechIntensity * 15 * eyeKernel * Math.sin(blinkPhase * Math.PI); // Clear but not extreme
+          const eyeSquint = speechIntensity * 8 * eyeKernel * Math.sin(expressionPhase + i * 0.3); // Visible squinting
 
-          // Eyebrow expressions — DRAMATIC raise during speech, emotions
+          // Eyebrow expressions — CLEAR raise during speech at ACTUAL eyebrow location
           const browDist = Math.abs(yNorm - EYEBROW_Y);
           const browKernel = Math.max(0, 1 - browDist / EYEBROW_HALF);
-          const browRaise = voice * 20 * browKernel * Math.sin(tSec * 2.8 + phA[i] * 1.2) * -1; // 3x stronger, negative = up
-          const browFurrow = smoothedVoice * 8 * browKernel * Math.sin(tSec * 1.9 + i * 0.15); // 4x stronger
+          const browRaise = voice * 12 * browKernel * Math.sin(tSec * 2.8 + phA[i] * 1.2) * -1; // Negative = up
+          const browFurrow = smoothedVoice * 6 * browKernel * Math.sin(tSec * 1.9 + i * 0.15); // Controlled movement
 
           // Cheek expressions — DRAMATIC smile dynamics, cheek movement
           const cheekDist = Math.abs(yNorm - CHEEK_Y);
