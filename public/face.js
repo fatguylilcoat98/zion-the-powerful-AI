@@ -191,11 +191,11 @@
       const imgW = particles.imgW, imgH = particles.imgH;
       const cxImg = particles.cxImg, cyImg = particles.cyImg;
 
-      // Canvas projection: face centroid at canvas center, scaled to fit.
-      const padding = 0.95;
+      // Canvas projection: face scaled smaller to ensure MOUTH is visible
+      const padding = 0.75; // Reduced from 0.95 to ensure entire face fits
       const scale = Math.min(w / imgW, h / imgH) * padding;
       const cX = w * 0.5;
-      const cY = h * 0.5;
+      const cY = h * 0.45; // Moved up slightly to ensure mouth area is visible
 
       // Scatter ring sized to the canvas: dots arrive from somewhere
       // between the face envelope (~half the smaller canvas dim) and the
