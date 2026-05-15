@@ -223,10 +223,10 @@
       // talking-activity signal, not a per-phoneme tracker.
       smoothedVoice = smoothedVoice * 0.88 + voice * 0.12;
       const tSec = now * 0.001;
-      // Head bob — DRAMATIC uniform Y translation of the whole face. Dips down while
-      // Zion is actively talking, eases back when quiet. Reads as a person
-      // nodding into their words, not a particle wave.
-      const headBob = smoothedVoice * 15.0; // More than 2x stronger head movement
+      // Natural talking head movement — like a real human conversation
+      const headBob = smoothedVoice * 8.0; // Natural head nod
+      const headTilt = Math.sin(tSec * 1.3) * smoothedVoice * 3.0; // Subtle head tilt
+      const headSway = Math.cos(tSec * 0.7) * voice * 2.0; // Side-to-side movement
 
       // Live-state idle motion — keeps the whole face alive when quiet.
       // The talking motion (jaw drop / lip split / lower-face shimmer) is
@@ -340,9 +340,9 @@
           const liveX = smoothedVoice * 1.2 * Math.sin(tSec * 9.3 + i * 0.71);
           const liveY = smoothedVoice * 1.2 * Math.cos(tSec * 9.1 + i * 0.91);
 
-          // Combine all facial expressions for natural human-like movement
-          const imgX = xs[i] + idleDx + shimX + liveX + browFurrow + cheekPuff + mouthTwist;
-          const imgY = ys[i] + idleDy + jawDrop + lipSplit + shimY + headBob + liveY
+          // Combine all facial expressions for natural human-like movement + head movement
+          const imgX = xs[i] + idleDx + shimX + liveX + browFurrow + cheekPuff + mouthTwist + headSway;
+          const imgY = ys[i] + idleDy + jawDrop + lipSplit + shimY + headBob + headTilt + liveY
                        + speechBlink + eyeSquint + browRaise + cheekLift + foreheadTension + mouthCurvature;
           pxArr[i] = cX + (imgX - cxImg) * sX;
           pyArr[i] = cY + (imgY - cyImg) * sY;
@@ -390,6 +390,59 @@
         }
       }
       ctx.restore();
+
+      // ═══ ADD ACTUAL MOUTH AND LIPS ═══
+      if (phaseKind === 'live') {
+        // Mouth position on the face
+        const mouthBaseX = cX;
+        const mouthBaseY = cY + (0.25 * h); // Position mouth in lower face area
+
+        // Voice-reactive mouth shape
+        const mouthWidth = 25 + voice * 35; // Mouth opens wider during speech
+        const mouthHeight = 3 + voice * 12; // Mouth opens taller during speech
+        const jawDrop = voice * 8; // Jaw drops during speech
+
+        // Upper lip
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        ctx.fillStyle = 'rgba(0, 220, 240, 0.8)';
+        ctx.beginPath();
+        ctx.ellipse(
+          mouthBaseX + headSway,
+          mouthBaseY - mouthHeight/2 + headTilt,
+          mouthWidth/2,
+          2,
+          0, 0, Math.PI * 2
+        );
+        ctx.fill();
+
+        // Lower lip (moves with jaw)
+        ctx.fillStyle = 'rgba(0, 200, 225, 0.7)';
+        ctx.beginPath();
+        ctx.ellipse(
+          mouthBaseX + headSway,
+          mouthBaseY + mouthHeight/2 + jawDrop + headTilt,
+          mouthWidth/2,
+          2,
+          0, 0, Math.PI * 2
+        );
+        ctx.fill();
+
+        // Mouth interior (darker when open)
+        if (voice > 0.1) {
+          ctx.fillStyle = 'rgba(20, 40, 60, ' + (voice * 0.6) + ')';
+          ctx.beginPath();
+          ctx.ellipse(
+            mouthBaseX + headSway,
+            mouthBaseY + jawDrop/2 + headTilt,
+            mouthWidth/2 - 2,
+            mouthHeight/2,
+            0, 0, Math.PI * 2
+          );
+          ctx.fill();
+        }
+        ctx.restore();
+      }
 
       requestAnimationFrame(frame);
     }
