@@ -191,11 +191,11 @@
       const imgW = particles.imgW, imgH = particles.imgH;
       const cxImg = particles.cxImg, cyImg = particles.cyImg;
 
-      // Canvas projection: face scaled smaller to ensure MOUTH is visible
-      const padding = 0.75; // Reduced from 0.95 to ensure entire face fits
+      // Canvas projection: face much smaller to show COMPLETE mouth including chin
+      const padding = 0.55; // Much smaller - was 0.75, now 0.55
       const scale = Math.min(w / imgW, h / imgH) * padding;
       const cX = w * 0.5;
-      const cY = h * 0.45; // Moved up slightly to ensure mouth area is visible
+      const cY = h * 0.35; // Moved much higher to show bottom lip and chin
 
       // Scatter ring sized to the canvas: dots arrive from somewhere
       // between the face envelope (~half the smaller canvas dim) and the
