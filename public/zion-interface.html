@@ -221,9 +221,10 @@
     }
     .mode-label { font-size: 9px; color: var(--text-mute); letter-spacing: 1.2px; text-transform: uppercase; margin-right: 2px; }
 
-    /* Live-voice transcript strip — HIDDEN for cleaner face presentation */
+    /* Live-voice transcript strip — visible only during a Converse session */
     .converse-strip {
-      display: none !important; /* Completely hidden for showcase */
+      display: flex; flex-direction: column; gap: 6px;
+      max-width: 820px; width: 100%; align-self: center; margin-bottom: 2px;
     }
     .converse-strip[hidden] { display: none; }
     .converse-line {
