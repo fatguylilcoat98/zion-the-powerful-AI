@@ -223,10 +223,10 @@
       // talking-activity signal, not a per-phoneme tracker.
       smoothedVoice = smoothedVoice * 0.88 + voice * 0.12;
       const tSec = now * 0.001;
-      // Head bob — uniform Y translation of the whole face. Dips down while
+      // Head bob — DRAMATIC uniform Y translation of the whole face. Dips down while
       // Zion is actively talking, eases back when quiet. Reads as a person
       // nodding into their words, not a particle wave.
-      const headBob = smoothedVoice * 7.0;
+      const headBob = smoothedVoice * 15.0; // More than 2x stronger head movement
 
       // Live-state idle motion — keeps the whole face alive when quiet.
       // The talking motion (jaw drop / lip split / lower-face shimmer) is
@@ -281,19 +281,19 @@
 
           const yNorm = ys[i] * imgHinv;
 
-          // Jaw drop — ramp from 0 at JAW_START up to 1 at the chin.
+          // Jaw drop — DRAMATIC jaw movement during speech
           // Voice-scaled. The lower the dot, the more it drops, like a
           // jaw rotating around the temporomandibular axis.
           const jawIntensity = yNorm > JAW_START ? (yNorm - JAW_START) / JAW_SPAN : 0;
-          const jawDrop = voice * 30 * jawIntensity;
+          const jawDrop = voice * 45 * jawIntensity; // 1.5x stronger jaw movement
 
-          // Lip split — smooth sin-shaped displacement across the band.
+          // Lip split — DRAMATIC lip movement during speech
           // No abrupt crossover at the center (which read as a sharp line);
           // instead dots near the center barely move, mid-band displaces
           // most, edges return to zero — like the soft motion of parting lips.
           const lipDist = yNorm - LIP_Y;
           const lipKernel = Math.max(0, 1 - Math.abs(lipDist) / LIP_HALF);
-          const lipSplit = voice * 11 * lipKernel * Math.sin(lipDist * Math.PI / LIP_HALF);
+          const lipSplit = voice * 22 * lipKernel * Math.sin(lipDist * Math.PI / LIP_HALF); // 2x stronger lip movement
 
           // Phoneme shimmer — fast wobble, scoped to the lower face so the
           // upper face stays still. Drives the per-syllable detail.
@@ -306,32 +306,32 @@
           const expressionPhase = tSec * 2.1 + phA[i] * 0.6; // Main expression rhythm
           const speechIntensity = voice * (0.8 + 0.4 * Math.sin(tSec * 3.7)); // Variable speech intensity
 
-          // Eye expressions — blinking and eye movement during speech
+          // Eye expressions — DRAMATIC blinking and eye movement during speech
           const eyeDist = Math.abs(yNorm - EYE_Y);
           const eyeKernel = Math.max(0, 1 - eyeDist / EYE_HALF);
           const blinkPhase = Math.sin(tSec * 3.2 + phA[i] * 0.8) * 0.5 + 0.5; // Slow blinks
-          const speechBlink = speechIntensity * 8 * eyeKernel * Math.sin(blinkPhase * Math.PI);
-          const eyeSquint = speechIntensity * 3 * eyeKernel * Math.sin(expressionPhase + i * 0.3); // Coordinated squinting
+          const speechBlink = speechIntensity * 25 * eyeKernel * Math.sin(blinkPhase * Math.PI); // 3x stronger
+          const eyeSquint = speechIntensity * 12 * eyeKernel * Math.sin(expressionPhase + i * 0.3); // 4x stronger
 
-          // Eyebrow expressions — raise during speech, emotions
+          // Eyebrow expressions — DRAMATIC raise during speech, emotions
           const browDist = Math.abs(yNorm - EYEBROW_Y);
           const browKernel = Math.max(0, 1 - browDist / EYEBROW_HALF);
-          const browRaise = voice * 6 * browKernel * Math.sin(tSec * 2.8 + phA[i] * 1.2) * -1; // Negative = up
-          const browFurrow = smoothedVoice * 2 * browKernel * Math.sin(tSec * 1.9 + i * 0.15);
+          const browRaise = voice * 20 * browKernel * Math.sin(tSec * 2.8 + phA[i] * 1.2) * -1; // 3x stronger, negative = up
+          const browFurrow = smoothedVoice * 8 * browKernel * Math.sin(tSec * 1.9 + i * 0.15); // 4x stronger
 
-          // Cheek expressions — smile dynamics, cheek movement
+          // Cheek expressions — DRAMATIC smile dynamics, cheek movement
           const cheekDist = Math.abs(yNorm - CHEEK_Y);
           const cheekKernel = Math.max(0, 1 - cheekDist / CHEEK_HALF);
-          const cheekLift = voice * 4 * cheekKernel * Math.sin(tSec * 3.5 + phA[i] * 1.1) * -0.5; // Slight smile lift
-          const cheekPuff = smoothedVoice * 3 * cheekKernel * Math.sin(tSec * 2.1 + i * 0.4); // Cheek puffing
+          const cheekLift = voice * 15 * cheekKernel * Math.sin(tSec * 3.5 + phA[i] * 1.1) * -0.8; // Major smile lift
+          const cheekPuff = smoothedVoice * 12 * cheekKernel * Math.sin(tSec * 2.1 + i * 0.4); // Strong cheek puffing
 
-          // Forehead expressions — wrinkles and tension
+          // Forehead expressions — DRAMATIC wrinkles and tension
           const foreheadKernel = yNorm < FOREHEAD_Y ? (1 - yNorm / FOREHEAD_Y) : 0;
-          const foreheadTension = voice * 2 * foreheadKernel * Math.sin(tSec * 1.6 + phA[i] * 0.7);
+          const foreheadTension = voice * 10 * foreheadKernel * Math.sin(tSec * 1.6 + phA[i] * 0.7); // 5x stronger
 
-          // Enhanced mouth expressions — more nuanced than just lip split
-          const mouthCurvature = voice * 5 * lipKernel * Math.sin(tSec * 4.2 + xs[i] * 0.01); // Smile curvature
-          const mouthTwist = smoothedVoice * 3 * lipKernel * Math.cos(tSec * 3.1 + i * 0.25); // Mouth asymmetry
+          // Enhanced mouth expressions — DRAMATIC curvature and movement
+          const mouthCurvature = voice * 18 * lipKernel * Math.sin(tSec * 4.2 + xs[i] * 0.01); // Strong smile curvature
+          const mouthTwist = smoothedVoice * 10 * lipKernel * Math.cos(tSec * 3.1 + i * 0.25); // Pronounced asymmetry
 
           // Whole-face liveliness shimmer — INCOHERENT (phase seeded by
           // index, not by spatial position). Adjacent dots don't move
