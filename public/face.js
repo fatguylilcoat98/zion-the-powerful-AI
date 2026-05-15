@@ -69,7 +69,7 @@
     // Cache-buster — Render's CDN / browser HTTP cache was holding onto an
     // older copy of the data files past a deploy. Bump this on every data
     // change so clients always pull the fresh stipple.
-    const cb = '?v=v13a';
+    const cb = '?v=v14';
     let particles = null;
     Promise.all([
       fetch('/zion-particle-meta.json' + cb).then(r => { if (!r.ok) throw new Error('meta ' + r.status); return r.json(); }),
@@ -223,10 +223,10 @@
       // talking-activity signal, not a per-phoneme tracker.
       smoothedVoice = smoothedVoice * 0.88 + voice * 0.12;
       const tSec = now * 0.001;
-      // Head bob — uniform Y translation of the whole face. Dips down a few
-      // pixels while Zion is actively talking, eases back when quiet. Reads
-      // as a person nodding into their words, not a particle wave.
-      const headBob = smoothedVoice * 4.0;
+      // Head bob — uniform Y translation of the whole face. Dips down while
+      // Zion is actively talking, eases back when quiet. Reads as a person
+      // nodding into their words, not a particle wave.
+      const headBob = smoothedVoice * 7.0;
 
       // Live-state idle motion — keeps the whole face alive when quiet.
       // The talking motion (jaw drop / lip split / lower-face shimmer) is
@@ -262,9 +262,9 @@
         const imgHinv = 1 / imgH;
         // Lip/mouth band center (y_norm). Bbox now runs crown -> chin only
         // (no neck shadow). Lips sit around 0.73 in the trimmed bbox.
-        const LIP_Y = 0.73;
+        const LIP_Y = 0.76;
         const LIP_HALF = 0.09;  // half-width of the lip band, in y_norm
-        const JAW_START = 0.55; // y_norm where jaw drop ramp starts (below nose)
+        const JAW_START = 0.57; // y_norm where jaw drop ramp starts (below nose)
         const JAW_SPAN  = 1.0 - JAW_START;
         for (let i = 0; i < n; i++) {
           // Idle breathing — every dot, voice-independent
@@ -277,7 +277,7 @@
           // Voice-scaled. The lower the dot, the more it drops, like a
           // jaw rotating around the temporomandibular axis.
           const jawIntensity = yNorm > JAW_START ? (yNorm - JAW_START) / JAW_SPAN : 0;
-          const jawDrop = voice * 22 * jawIntensity;
+          const jawDrop = voice * 30 * jawIntensity;
 
           // Lip split — smooth sin-shaped displacement across the band.
           // No abrupt crossover at the center (which read as a sharp line);
@@ -285,7 +285,7 @@
           // most, edges return to zero — like the soft motion of parting lips.
           const lipDist = yNorm - LIP_Y;
           const lipKernel = Math.max(0, 1 - Math.abs(lipDist) / LIP_HALF);
-          const lipSplit = voice * 7 * lipKernel * Math.sin(lipDist * Math.PI / LIP_HALF);
+          const lipSplit = voice * 11 * lipKernel * Math.sin(lipDist * Math.PI / LIP_HALF);
 
           // Phoneme shimmer — fast wobble, scoped to the lower face so the
           // upper face stays still. Drives the per-syllable detail.
@@ -296,8 +296,8 @@
           // index, not by spatial position). Adjacent dots don't move
           // together, so no diagonal wave streaks. Very low amplitude so
           // it reads as "the surface is alive" not "particles are jittering".
-          const liveX = smoothedVoice * 0.7 * Math.sin(tSec * 9.3 + i * 0.71);
-          const liveY = smoothedVoice * 0.7 * Math.cos(tSec * 9.1 + i * 0.91);
+          const liveX = smoothedVoice * 1.2 * Math.sin(tSec * 9.3 + i * 0.71);
+          const liveY = smoothedVoice * 1.2 * Math.cos(tSec * 9.1 + i * 0.91);
 
           const imgX = xs[i] + idleDx + shimX + liveX;
           const imgY = ys[i] + idleDy + jawDrop + lipSplit + shimY + headBob + liveY;
