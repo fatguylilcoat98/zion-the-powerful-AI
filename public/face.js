@@ -260,12 +260,20 @@
         // then project through the breath-scaled (sX, sY) at draw time.
         // Stash image-space positions; pass 2 projects them.
         const imgHinv = 1 / imgH;
-        // Lip/mouth band center (y_norm). Bbox now runs crown -> chin only
-        // (no neck shadow). Lips sit around 0.73 in the trimmed bbox.
-        const LIP_Y = 0.76;
-        const LIP_HALF = 0.09;  // half-width of the lip band, in y_norm
-        const JAW_START = 0.57; // y_norm where jaw drop ramp starts (below nose)
+        // Facial region definitions for human-like expressions
+        const LIP_Y = 0.76;           // Lip/mouth band center
+        const LIP_HALF = 0.09;        // Half-width of lip band
+        const JAW_START = 0.57;       // Where jaw drop starts (below nose)
         const JAW_SPAN  = 1.0 - JAW_START;
+
+        // New facial regions for enhanced expressions
+        const EYE_Y = 0.35;           // Eye region center
+        const EYE_HALF = 0.08;        // Eye region half-height
+        const EYEBROW_Y = 0.25;       // Eyebrow region
+        const EYEBROW_HALF = 0.06;    // Eyebrow region half-height
+        const CHEEK_Y = 0.55;         // Cheek region center
+        const CHEEK_HALF = 0.12;      // Cheek region half-height
+        const FOREHEAD_Y = 0.15;      // Forehead region
         for (let i = 0; i < n; i++) {
           // Idle breathing — every dot, voice-independent
           const idleDx = idleAmp * Math.sin(orbPhase + phA[i]);
@@ -292,6 +300,39 @@
           const shimX = voice * 1.4 * jawIntensity * Math.sin(sylPhase + phA[i] * 1.7);
           const shimY = voice * 1.4 * jawIntensity * Math.sin(sylPhase + phB[i] * 1.7);
 
+          // ═══ ENHANCED HUMAN FACIAL EXPRESSIONS ═══
+
+          // Expression coordination phases for natural movement
+          const expressionPhase = tSec * 2.1 + phA[i] * 0.6; // Main expression rhythm
+          const speechIntensity = voice * (0.8 + 0.4 * Math.sin(tSec * 3.7)); // Variable speech intensity
+
+          // Eye expressions — blinking and eye movement during speech
+          const eyeDist = Math.abs(yNorm - EYE_Y);
+          const eyeKernel = Math.max(0, 1 - eyeDist / EYE_HALF);
+          const blinkPhase = Math.sin(tSec * 3.2 + phA[i] * 0.8) * 0.5 + 0.5; // Slow blinks
+          const speechBlink = speechIntensity * 8 * eyeKernel * Math.sin(blinkPhase * Math.PI);
+          const eyeSquint = speechIntensity * 3 * eyeKernel * Math.sin(expressionPhase + i * 0.3); // Coordinated squinting
+
+          // Eyebrow expressions — raise during speech, emotions
+          const browDist = Math.abs(yNorm - EYEBROW_Y);
+          const browKernel = Math.max(0, 1 - browDist / EYEBROW_HALF);
+          const browRaise = voice * 6 * browKernel * Math.sin(tSec * 2.8 + phA[i] * 1.2) * -1; // Negative = up
+          const browFurrow = smoothedVoice * 2 * browKernel * Math.sin(tSec * 1.9 + i * 0.15);
+
+          // Cheek expressions — smile dynamics, cheek movement
+          const cheekDist = Math.abs(yNorm - CHEEK_Y);
+          const cheekKernel = Math.max(0, 1 - cheekDist / CHEEK_HALF);
+          const cheekLift = voice * 4 * cheekKernel * Math.sin(tSec * 3.5 + phA[i] * 1.1) * -0.5; // Slight smile lift
+          const cheekPuff = smoothedVoice * 3 * cheekKernel * Math.sin(tSec * 2.1 + i * 0.4); // Cheek puffing
+
+          // Forehead expressions — wrinkles and tension
+          const foreheadKernel = yNorm < FOREHEAD_Y ? (1 - yNorm / FOREHEAD_Y) : 0;
+          const foreheadTension = voice * 2 * foreheadKernel * Math.sin(tSec * 1.6 + phA[i] * 0.7);
+
+          // Enhanced mouth expressions — more nuanced than just lip split
+          const mouthCurvature = voice * 5 * lipKernel * Math.sin(tSec * 4.2 + xs[i] * 0.01); // Smile curvature
+          const mouthTwist = smoothedVoice * 3 * lipKernel * Math.cos(tSec * 3.1 + i * 0.25); // Mouth asymmetry
+
           // Whole-face liveliness shimmer — INCOHERENT (phase seeded by
           // index, not by spatial position). Adjacent dots don't move
           // together, so no diagonal wave streaks. Very low amplitude so
@@ -299,8 +340,10 @@
           const liveX = smoothedVoice * 1.2 * Math.sin(tSec * 9.3 + i * 0.71);
           const liveY = smoothedVoice * 1.2 * Math.cos(tSec * 9.1 + i * 0.91);
 
-          const imgX = xs[i] + idleDx + shimX + liveX;
-          const imgY = ys[i] + idleDy + jawDrop + lipSplit + shimY + headBob + liveY;
+          // Combine all facial expressions for natural human-like movement
+          const imgX = xs[i] + idleDx + shimX + liveX + browFurrow + cheekPuff + mouthTwist;
+          const imgY = ys[i] + idleDy + jawDrop + lipSplit + shimY + headBob + liveY
+                       + speechBlink + eyeSquint + browRaise + cheekLift + foreheadTension + mouthCurvature;
           pxArr[i] = cX + (imgX - cxImg) * sX;
           pyArr[i] = cY + (imgY - cyImg) * sY;
         }

@@ -221,10 +221,9 @@
     }
     .mode-label { font-size: 9px; color: var(--text-mute); letter-spacing: 1.2px; text-transform: uppercase; margin-right: 2px; }
 
-    /* Live-voice transcript strip — visible only during a Converse session */
+    /* Live-voice transcript strip — HIDDEN for cleaner face presentation */
     .converse-strip {
-      display: flex; flex-direction: column; gap: 6px;
-      max-width: 820px; width: 100%; align-self: center; margin-bottom: 2px;
+      display: none !important; /* Completely hidden for showcase */
     }
     .converse-strip[hidden] { display: none; }
     .converse-line {
@@ -495,9 +494,13 @@
         if (!res.ok) throw new Error('not ok');
         const data = await res.json();
         $('versionBadge').textContent = `Zion v${data.version}`;
-      } catch (_) { $('versionBadge').textContent = 'Zion v?'; }
+      } catch (err) {
+        console.warn('Version load failed:', err);
+        $('versionBadge').textContent = 'Zion v2.0.0'; // Fallback to known version
+      }
     }
-    loadVersion();
+    // Load version after a short delay to ensure DOM is ready
+    setTimeout(loadVersion, 100);
 
     let modes = { tone: 'home', list_mode: false, grammar: false };
     function renderModes() {
@@ -528,7 +531,10 @@
     async function fetchMemories() {
       try {
         const { data: { session } } = await zionSupabase.auth.getSession();
-        if (!session) return;
+        if (!session) {
+          renderMemories([]); // Show "no memories" instead of "loading" when not authenticated
+          return;
+        }
         const res = await zionFetch(`/api/memory/${session.user.id}`);
         if (!res.ok) { renderMemories([]); return; }
         const data = await res.json();
@@ -1023,6 +1029,11 @@
     });
 
     checkAuthState();
+
+    // Initialize memory state immediately
+    setTimeout(() => {
+      fetchMemories();
+    }, 200);
 
     if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
   </script>
