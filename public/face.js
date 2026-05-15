@@ -369,10 +369,16 @@
         }
       }
 
-      // Pass 2: bucketed draws
+      // Pass 2: bucketed draws WITH MOUTH OPENING
       const dpr = window.devicePixelRatio || 1;
       const pSize = Math.max(1.0, 1.4); // 1.4 css px regardless of dpr
       const half = pSize * 0.5;
+
+      // Calculate mouth opening area
+      const mouthCenterX = cX;
+      const mouthCenterY = cY + (0.15 * h); // Position mouth area
+      const mouthWidth = 30 + voice * 40; // Mouth opens wider during speech
+      const mouthHeight = 8 + voice * 15; // Mouth opens taller during speech
 
       ctx.save();
       ctx.globalCompositeOperation = 'lighter';
@@ -386,63 +392,45 @@
         for (let i = 0; i < n; i++) {
           const b = bs[i];
           if (b < bMin || b >= bMax) continue;
-          ctx.fillRect(pxArr[i] - half, pyArr[i] - half, pSize, pSize);
+
+          // CREATE MOUTH OPENING - skip particles in mouth area
+          const px = pxArr[i];
+          const py = pyArr[i];
+          const distFromMouthX = Math.abs(px - mouthCenterX);
+          const distFromMouthY = Math.abs(py - mouthCenterY);
+
+          // Skip particles inside mouth opening (creates actual mouth hole)
+          if (distFromMouthX < mouthWidth/2 && distFromMouthY < mouthHeight/2) {
+            continue; // Don't draw particle - creates mouth opening
+          }
+
+          ctx.fillRect(px - half, py - half, pSize, pSize);
         }
       }
       ctx.restore();
 
-      // ═══ ADD ACTUAL MOUTH AND LIPS ═══
+      // ═══ ADD LIP DEFINITION AROUND MOUTH OPENING ═══
       if (phaseKind === 'live') {
-        // Mouth position on the face
-        const mouthBaseX = cX;
-        const mouthBaseY = cY + (0.25 * h); // Position mouth in lower face area
-
-        // Voice-reactive mouth shape
-        const mouthWidth = 25 + voice * 35; // Mouth opens wider during speech
-        const mouthHeight = 3 + voice * 12; // Mouth opens taller during speech
-        const jawDrop = voice * 8; // Jaw drops during speech
-
-        // Upper lip
         ctx.save();
-        ctx.globalAlpha = alpha;
-        ctx.fillStyle = 'rgba(0, 220, 240, 0.8)';
-        ctx.beginPath();
-        ctx.ellipse(
-          mouthBaseX + headSway,
-          mouthBaseY - mouthHeight/2 + headTilt,
-          mouthWidth/2,
-          2,
-          0, 0, Math.PI * 2
-        );
-        ctx.fill();
+        ctx.globalAlpha = alpha * 0.8;
 
-        // Lower lip (moves with jaw)
-        ctx.fillStyle = 'rgba(0, 200, 225, 0.7)';
+        // Upper lip line
+        ctx.strokeStyle = 'rgba(0, 200, 240, 0.6)';
+        ctx.lineWidth = 2;
         ctx.beginPath();
-        ctx.ellipse(
-          mouthBaseX + headSway,
-          mouthBaseY + mouthHeight/2 + jawDrop + headTilt,
-          mouthWidth/2,
-          2,
-          0, 0, Math.PI * 2
-        );
-        ctx.fill();
+        ctx.arc(mouthCenterX, mouthCenterY - mouthHeight/2, mouthWidth/2, 0, Math.PI);
+        ctx.stroke();
 
-        // Mouth interior (darker when open)
-        if (voice > 0.1) {
-          ctx.fillStyle = 'rgba(20, 40, 60, ' + (voice * 0.6) + ')';
-          ctx.beginPath();
-          ctx.ellipse(
-            mouthBaseX + headSway,
-            mouthBaseY + jawDrop/2 + headTilt,
-            mouthWidth/2 - 2,
-            mouthHeight/2,
-            0, 0, Math.PI * 2
-          );
-          ctx.fill();
-        }
+        // Lower lip line (with jaw movement)
+        const jawOffset = voice * 6;
+        ctx.strokeStyle = 'rgba(0, 180, 220, 0.5)';
+        ctx.beginPath();
+        ctx.arc(mouthCenterX, mouthCenterY + mouthHeight/2 + jawOffset, mouthWidth/2, Math.PI, Math.PI * 2);
+        ctx.stroke();
+
         ctx.restore();
       }
+
 
       requestAnimationFrame(frame);
     }
