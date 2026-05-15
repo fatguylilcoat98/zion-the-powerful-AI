@@ -409,24 +409,47 @@
       }
       ctx.restore();
 
-      // ═══ ADD LIP DEFINITION AROUND MOUTH OPENING ═══
+      // ═══ ADD DOT-BASED LIP AND CHIN FEATURES ═══
       if (phaseKind === 'live') {
         ctx.save();
-        ctx.globalAlpha = alpha * 0.8;
+        ctx.globalAlpha = alpha;
 
-        // Upper lip line
-        ctx.strokeStyle = 'rgba(0, 200, 240, 0.6)';
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.arc(mouthCenterX, mouthCenterY - mouthHeight/2, mouthWidth/2, 0, Math.PI);
-        ctx.stroke();
+        // Create upper lip dots
+        const lipDots = 15;
+        const upperLipY = mouthCenterY - mouthHeight/2 - 5;
+        const lowerLipY = mouthCenterY + mouthHeight/2 + 5 + (voice * 8); // Jaw drop
 
-        // Lower lip line (with jaw movement)
-        const jawOffset = voice * 6;
-        ctx.strokeStyle = 'rgba(0, 180, 220, 0.5)';
-        ctx.beginPath();
-        ctx.arc(mouthCenterX, mouthCenterY + mouthHeight/2 + jawOffset, mouthWidth/2, Math.PI, Math.PI * 2);
-        ctx.stroke();
+        ctx.fillStyle = 'rgba(0, 220, 240, 0.8)';
+
+        // Upper lip dots
+        for (let i = 0; i < lipDots; i++) {
+          const t = i / (lipDots - 1);
+          const angle = Math.PI * t; // Half circle for upper lip
+          const x = mouthCenterX + Math.cos(angle) * (mouthWidth/2);
+          const y = upperLipY + Math.sin(angle) * 8;
+          ctx.fillRect(x - 1, y - 1, 2, 2);
+        }
+
+        // Lower lip dots (with jaw movement)
+        ctx.fillStyle = 'rgba(0, 200, 230, 0.7)';
+        for (let i = 0; i < lipDots; i++) {
+          const t = i / (lipDots - 1);
+          const angle = Math.PI + (Math.PI * t); // Bottom half circle for lower lip
+          const x = mouthCenterX + Math.cos(angle) * (mouthWidth/2);
+          const y = lowerLipY - Math.sin(angle) * 6;
+          ctx.fillRect(x - 1, y - 1, 2, 2);
+        }
+
+        // Chin dots
+        const chinDots = 20;
+        const chinY = lowerLipY + 15;
+        ctx.fillStyle = 'rgba(0, 190, 220, 0.6)';
+        for (let i = 0; i < chinDots; i++) {
+          const t = (i / (chinDots - 1)) * 2 - 1; // -1 to 1
+          const x = mouthCenterX + t * (mouthWidth/1.5);
+          const y = chinY + Math.abs(t) * 8; // Curved chin line
+          ctx.fillRect(x - 1, y - 1, 2, 2);
+        }
 
         ctx.restore();
       }
