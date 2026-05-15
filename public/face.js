@@ -69,7 +69,7 @@
     // Cache-buster — Render's CDN / browser HTTP cache was holding onto an
     // older copy of the data files past a deploy. Bump this on every data
     // change so clients always pull the fresh stipple.
-    const cb = '?v=v15';
+    const cb = '?v=v16';
     let particles = null;
     Promise.all([
       fetch('/zion-particle-meta.json' + cb).then(r => { if (!r.ok) throw new Error('meta ' + r.status); return r.json(); }),
@@ -298,8 +298,13 @@
           // Whole-face liveliness shimmer — INCOHERENT (phase seeded by
           // index, not spatial position) so neighbors don't move together:
           // no diagonal wave streaks. Subtle.
-          const liveX = smoothedVoice * 1.0 * Math.sin(tSec * 9.3 + i * 0.71);
-          const liveY = smoothedVoice * 1.0 * Math.cos(tSec * 9.1 + i * 0.91);
+          // Whole-face "dance" — INCOHERENT per-dot jitter (phase seeded by
+          // index, not position) so it sparkles instead of forming wave
+          // streaks. Amplitude scales hard with voice so the whole face
+          // visibly comes alive while Zion speaks, then settles when quiet.
+          const danceAmp = smoothedVoice * 6.0;
+          const liveX = danceAmp * Math.sin(tSec * 9.3 + i * 0.71);
+          const liveY = danceAmp * Math.cos(tSec * 11.1 + i * 0.91);
 
           const imgX = xs[i] + idleDx + liveX;
           const imgY = ys[i] + idleDy + jawOpen + upperLip + headBob + liveY;
@@ -333,6 +338,16 @@
       const pSize = Math.max(1.0, 1.4); // 1.4 css px regardless of dpr
       const half = pSize * 0.5;
 
+      // Voice-reactive color: idle is the calm teal; while Zion speaks the
+      // dots brighten and shift toward an electric aqua-white, plus an
+      // alpha boost so the whole face visibly lights up when talking.
+      const talk = Math.min(1, smoothedVoice * 1.5);
+      const cr = (talk * 165) | 0;          // 0   -> 165
+      const cg = (220 + talk * 35) | 0;     // 220 -> 255
+      const cbl = (240 + talk * 12) | 0;    // 240 -> 252
+      const aBoost = 1 + talk * 0.55;
+      const colPrefix = 'rgba(' + cr + ', ' + cg + ', ' + cbl + ', ';
+
       ctx.save();
       ctx.globalCompositeOperation = 'lighter';
       const bs = particles.b;
@@ -341,7 +356,7 @@
         const bMin = bk / BUCKETS;
         const bMax = (bk + 1) / BUCKETS;
         const aMul = 0.25 + 0.75 * ((bk + 0.5) / BUCKETS);
-        ctx.fillStyle = 'rgba(0, 220, 240, ' + (0.55 * alpha * aMul).toFixed(3) + ')';
+        ctx.fillStyle = colPrefix + (0.55 * alpha * aMul * aBoost).toFixed(3) + ')';
         for (let i = 0; i < n; i++) {
           const b = bs[i];
           if (b < bMin || b >= bMax) continue;
