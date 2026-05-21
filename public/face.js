@@ -298,15 +298,48 @@
       // ~85ms rise, ~250ms fall — talking-activity signal, not per-phoneme.
       smoothedVoice = smoothedVoice * 0.88 + voice * 0.12;
       const tSec = now * 0.001;
-      // Whole-head bob + sway — small uniform translation. Reads as
-      // micro-nod into the words, not a bounce.
-      const headBob  = smoothedVoice * 4.5;
-      const headSway = smoothedVoice * 1.6 * Math.sin(tSec * 0.9);
 
-      // Autonomic blink — happens every ~4.5s regardless of voice. A
-      // short 0.18s squeeze that gives the face life even when quiet.
+      // ── Head as a unit ──────────────────────────────────────────────
+      // Translation (bob + sway) plus a roll rotation around the centroid.
+      // Real heads tilt and pitch constantly while talking, not just bob.
+      // The roll has an always-on idle component so the head feels alive
+      // even when quiet, plus a voice-driven beat that lands on speech.
+      const headBob       = smoothedVoice * 6.5;
+      const headSway      = smoothedVoice * 2.2 * Math.sin(tSec * 0.9);
+      const headRollIdle  = Math.sin(tSec * 0.55) * 0.014
+                          + Math.sin(tSec * 0.37 + 1.3) * 0.008;
+      const headRollTalk  = smoothedVoice * 0.04 * Math.sin(tSec * 2.1);
+      const headRoll      = headRollIdle + headRollTalk;
+      const cosR = Math.cos(headRoll), sinR = Math.sin(headRoll);
+
+      // ── Autonomic blink ─────────────────────────────────────────────
+      // Every ~4.5s a quick squeeze (~0.18s) of the eye band, even when
+      // quiet. Voice doesn't trigger blinks — those are involuntary.
       const blinkCycle = (tSec * (1 / 4.5)) % 1;
       const blinkAmt = blinkCycle < 0.04 ? Math.sin(blinkCycle / 0.04 * Math.PI) : 0;
+
+      // ── Eye saccades + emphasis squint ──────────────────────────────
+      // Slow random drift of eye particles (the small horizontal/vertical
+      // micro-movements human eyes do constantly) plus a partial squint
+      // when smoothedVoice is high (eyes engage with the words).
+      const eyeDriftX  = (Math.sin(tSec * 0.21) + 0.5 * Math.sin(tSec * 0.43 + 1.1)) * 1.4;
+      const eyeDriftY  = Math.sin(tSec * 0.31 + 0.7) * 0.8;
+      const eyeSquint  = smoothedVoice * 0.32;
+
+      // ── Mouth-shape variation ───────────────────────────────────────
+      // Real mouths don't just open/close on voice level — they form
+      // different shapes for different vowels. Approximated here by a
+      // medium-fast oscillator scaled by voice, modulating lateral lip
+      // spread (positive = wider, negative = rounder) and jaw amplitude.
+      const mouthShape = Math.sin(tSec * 4.7) + 0.6 * Math.sin(tSec * 7.3 + 1.9);
+      const mouthWide  = voice * 3.0 * mouthShape;       // lateral spread/round
+      const jawJitter  = 1 + 0.35 * mouthShape;          // per-syllable size variation
+
+      // ── Asymmetry biases ────────────────────────────────────────────
+      // Slow asymmetry on brow/cheek so left and right don't mirror
+      // perfectly — the single biggest tell of a "puppet" face.
+      const browAsym  = 0.45 * Math.sin(tSec * 0.83);    // -0.45..0.45
+      const cheekAsym = 0.35 * Math.sin(tSec * 0.62 + 1.6);
 
       const orbOmega = 2 * Math.PI * 0.4;
       const orbPhase = tSec * orbOmega;
@@ -330,10 +363,13 @@
         const imgHinv = 1 / imgH;
         const halfW = imgW * 0.5;
         // Face-region landmarks in image-normalized y. Tuned for the
-        // lylo face-source.jpg portrait — eyes mid-upper-face, mouth
-        // about 3/4 down, chin near 0.9.
+        // lylo face-source.jpg portrait — forehead 0.18..0.32, brows
+        // 0.32..0.41, eyes 0.38..0.46, nose 0.48..0.62, cheeks 0.50..0.66,
+        // mouth 0.72..0.80, chin 0.92.
+        const FOREHEAD_TOP = 0.18, FOREHEAD_BOT = 0.32;
         const BROW_TOP   = 0.32, BROW_BOT  = 0.41;
         const EYE_TOP    = 0.38, EYE_BOT   = 0.46, EYE_CY = 0.42;
+        const NOSE_TOP   = 0.48, NOSE_BOT  = 0.66;
         const CHEEK_TOP  = 0.50, CHEEK_BOT = 0.66;
         const UPPER_LIP_N = 0.72;
         const LIP_Y       = 0.76;
@@ -349,52 +385,99 @@
           // column), wider for brow/cheek (spans most of the face).
           const mouthHw = Math.exp(-xRel * xRel * 4.5);
           const faceHw  = Math.exp(-xRel * xRel * 1.6);
+          // Side bias: -1 for left half, +1 for right half. Used for
+          // brow/cheek asymmetry so left and right don't mirror.
+          const side = xRel >= 0 ? 1 : -1;
 
-          // Jaw drop — small, smooth, sin-eased upper-lip-to-chin.
+          // ── Mouth: jaw drop + upper-lip lift + lateral shape ──
+          // jawJitter modulates amplitude per-syllable so the opening
+          // varies in size instead of pumping monotonically with voice.
           let jawOpen = 0;
           if (yNorm > UPPER_LIP_N && yNorm < CHIN_N + 0.04) {
             const tt = Math.min(1, (yNorm - UPPER_LIP_N) / SPAN);
-            jawOpen = voice * 7 * mouthHw * Math.sin(tt * Math.PI * 0.5);
+            jawOpen = voice * 9 * jawJitter * mouthHw * Math.sin(tt * Math.PI * 0.5);
           }
-
-          // Upper-lip lift — narrow band just above the lip line.
           const ulDist = yNorm - LIP_Y;
           const ulKernel = Math.max(0, 1 - Math.abs(ulDist) / 0.05);
-          const upperLip = (yNorm < LIP_Y) ? -voice * 3 * mouthHw * ulKernel : 0;
+          const upperLip = (yNorm < LIP_Y) ? -voice * 4 * mouthHw * ulKernel : 0;
+          // Lateral mouth spread/round — applied to mouth-band particles,
+          // pushes them outward (wide vowels) or inward (rounded vowels).
+          let mouthWidthDx = 0;
+          if (yNorm > UPPER_LIP_N - 0.02 && yNorm < CHIN_N) {
+            const mb = Math.sin(Math.min(1, (yNorm - (UPPER_LIP_N - 0.02)) / 0.18) * Math.PI);
+            mouthWidthDx = xRel * mouthWide * mouthHw * mb;
+          }
 
-          // Brow raise — eyebrows lift on speech, sin-eased so the
-          // motion peaks at the middle of the brow band and tapers at
-          // the edges. This is what makes the upper face *react*.
+          // ── Brow raise (asymmetric) ──
+          // Eyebrows are the most expressive feature for emphasis.
+          // Asymmetry stops the puppet-symmetric "both brows up exactly"
+          // look that ruins synthetic faces.
           let browLift = 0;
           if (yNorm > BROW_TOP && yNorm < BROW_BOT) {
             const bk = Math.sin((yNorm - BROW_TOP) / (BROW_BOT - BROW_TOP) * Math.PI);
-            browLift = -smoothedVoice * 2.5 * faceHw * bk;
+            const sideFactor = 1 + side * browAsym;
+            browLift = -smoothedVoice * 3.5 * faceHw * bk * sideFactor;
           }
 
-          // Cheek lift — outer cheeks pull up slightly during speech,
-          // suggesting an engaged / slightly-smiling expression.
+          // ── Forehead furrow correlated with brow ──
+          // When brows lift, forehead skin tugs down — wrinkle illusion.
+          // Without this the forehead floats while the brows move alone.
+          let foreheadDy = 0;
+          if (yNorm > FOREHEAD_TOP && yNorm < FOREHEAD_BOT) {
+            const fk = Math.sin((yNorm - FOREHEAD_TOP) / (FOREHEAD_BOT - FOREHEAD_TOP) * Math.PI);
+            foreheadDy = smoothedVoice * 1.3 * faceHw * fk;
+          }
+
+          // ── Cheek lift (asymmetric) ──
           let cheekLift = 0;
           if (yNorm > CHEEK_TOP && yNorm < CHEEK_BOT && Math.abs(xRel) > 0.30) {
             const ck = Math.sin((yNorm - CHEEK_TOP) / (CHEEK_BOT - CHEEK_TOP) * Math.PI);
-            cheekLift = -smoothedVoice * 1.4 * ck;
+            const sideFactor = 1 + side * cheekAsym;
+            cheekLift = -smoothedVoice * 2.2 * ck * sideFactor;
           }
 
-          // Blink — eye-band particles compress toward the eye center
-          // for ~0.18s every ~4.5s. Pure autonomic; runs even when quiet.
-          let blinkDy = 0;
+          // ── Nose / nostril micro-motion ──
+          // Tiny lateral flare of central-column dots in the nose band
+          // on voice peaks. Reads as nostril life, not a pulse.
+          let noseDx = 0;
+          if (yNorm > NOSE_TOP && yNorm < NOSE_BOT && Math.abs(xRel) < 0.18) {
+            noseDx = side * smoothedVoice * 0.9;
+          }
+
+          // ── Eye saccades + emphasis squint + blink ──
+          // Saccades are the small constant micro-movements eyes always
+          // do. Squint compresses the eye band partially on emphasis.
+          // Blink is a separate hard pulse from the autonomic timer.
+          let eyeDx = 0, eyeDy = 0;
+          if (yNorm > EYE_TOP && yNorm < EYE_BOT) {
+            eyeDx += eyeDriftX;
+            eyeDy += eyeDriftY;
+            // Squint: partial compression toward EYE_CY scaled by voice
+            eyeDy += (EYE_CY - yNorm) * imgH * eyeSquint;
+          }
           if (blinkAmt > 0 && yNorm > EYE_TOP && yNorm < EYE_BOT) {
-            blinkDy = (EYE_CY - yNorm) * imgH * blinkAmt * 0.55;
+            eyeDy += (EYE_CY - yNorm) * imgH * blinkAmt * 0.55;
           }
 
-          // Whole-face shimmer — incoherent per-dot jitter (phase seeded
-          // by index) so it sparkles instead of forming wave streaks.
-          // Subtle so the head reads as alive without looking jittery.
-          const danceAmp = smoothedVoice * 2.4;
+          // ── Whole-face shimmer ──
+          // Incoherent per-dot jitter (phase seeded by index) so it
+          // sparkles instead of forming wave streaks. The "alive" base.
+          const danceAmp = smoothedVoice * 3.0;
           const liveX = danceAmp * Math.sin(tSec * 9.3 + i * 0.71);
           const liveY = danceAmp * Math.cos(tSec * 11.1 + i * 0.91);
 
-          const imgX = xs[i] + idleDx + liveX + headSway;
-          const imgY = ys[i] + idleDy + jawOpen + upperLip + browLift + cheekLift + blinkDy + headBob + liveY;
+          // ── Head as a unit: roll around centroid, then translate ──
+          // Rotation around face center comes FIRST so per-feature offsets
+          // are applied to the already-rotated head — the whole head moves
+          // together, then the mouth/brow/etc. animate within it.
+          const dx0 = xs[i] - cxImg;
+          const dy0 = ys[i] - cyImg;
+          const rx  = dx0 * cosR - dy0 * sinR;
+          const ry  = dx0 * sinR + dy0 * cosR;
+
+          const imgX = cxImg + rx + idleDx + liveX + headSway + mouthWidthDx + noseDx + eyeDx;
+          const imgY = cyImg + ry + idleDy + liveY + headBob + jawOpen + upperLip
+                      + browLift + foreheadDy + cheekLift + eyeDy;
           pxArr[i] = cX + (imgX - cxImg) * sX;
           pyArr[i] = cY + (imgY - cyImg) * sY;
         }
