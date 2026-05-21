@@ -298,9 +298,11 @@
       // ~85ms rise, ~250ms fall — talking-activity signal, not per-phoneme.
       smoothedVoice = smoothedVoice * 0.88 + voice * 0.12;
       const tSec = now * 0.001;
-      // Whole-head bob — uniform Y translation. Reads as Zion nodding into
-      // his words, not a particle wave.
-      const headBob = smoothedVoice * 7.0;
+      // Whole-head bob — uniform Y translation + a touch of sway. Reads as
+      // Zion nodding into his words; the whole head moves as one unit,
+      // not a particle wave.
+      const headBob  = smoothedVoice * 12.0;
+      const headSway = smoothedVoice * 4.0 * Math.sin(tSec * 1.6);
 
       const orbOmega = 2 * Math.PI * 0.4;
       const orbPhase = tSec * orbOmega;
@@ -336,27 +338,31 @@
 
           const yNorm = ys[i] * imgHinv;
           const xRel = (xs[i] - halfW) / halfW;
-          const hw = Math.exp(-xRel * xRel * 3.4);
+          // Tighter central-column Gaussian — focuses mouth motion on the
+          // mouth column instead of bleeding into the cheeks.
+          const hw = Math.exp(-xRel * xRel * 4.5);
 
           let jawOpen = 0;
           if (yNorm > UPPER_LIP_N) {
             const tt = Math.min(1, (yNorm - UPPER_LIP_N) / SPAN);
-            jawOpen = voice * 16 * hw * Math.sin(tt * Math.PI * 0.5);
+            jawOpen = voice * 24 * hw * Math.sin(tt * Math.PI * 0.5);
           }
 
+          // Upper-lip lift — widened band + stronger pull so the gap
+          // between the lips actually opens, not just shifts.
           const ulDist = yNorm - LIP_Y;
-          const ulKernel = Math.max(0, 1 - Math.abs(ulDist) / 0.045);
-          const upperLip = (yNorm < LIP_Y) ? -voice * 4 * hw * ulKernel : 0;
+          const ulKernel = Math.max(0, 1 - Math.abs(ulDist) / 0.06);
+          const upperLip = (yNorm < LIP_Y) ? -voice * 9 * hw * ulKernel : 0;
 
           // Whole-face dance — incoherent per-dot jitter (phase seeded by
           // index, not position) so it sparkles instead of forming wave
           // streaks. Amplitude scales hard with voice so the whole head
           // visibly comes alive while Zion speaks, then settles when quiet.
-          const danceAmp = smoothedVoice * 6.0;
+          const danceAmp = smoothedVoice * 8.0;
           const liveX = danceAmp * Math.sin(tSec * 9.3 + i * 0.71);
           const liveY = danceAmp * Math.cos(tSec * 11.1 + i * 0.91);
 
-          const imgX = xs[i] + idleDx + liveX;
+          const imgX = xs[i] + idleDx + liveX + headSway;
           const imgY = ys[i] + idleDy + jawOpen + upperLip + headBob + liveY;
           pxArr[i] = cX + (imgX - cxImg) * sX;
           pyArr[i] = cY + (imgY - cyImg) * sY;
