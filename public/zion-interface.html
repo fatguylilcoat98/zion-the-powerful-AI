@@ -425,13 +425,29 @@
     }
 
     @media (max-width: 900px) {
-      .zion-main { grid-template-columns: 0 1fr 0; }
+      .zion-main {
+        grid-template-columns: 1fr;
+        grid-template-rows: 60px 1fr auto;
+        grid-template-areas: "header" "canvas" "console";
+      }
       .provenance-panel, .pulse-panel { display: none; }
+      .neural-center { padding: 10px; }
+      .conversation-panel { padding: 12px 8px; }
     }
     @media (max-width: 720px) {
       .header-title { font-size: 11px; letter-spacing: 1.2px; }
-      .header-status { font-size: 8.5px; letter-spacing: 0.3px; }
+      .header-status { font-size: 8.5px; letter-spacing: 0.3px; display: none; }
       .control-btn { height: 30px; min-width: 50px; font-size: 10px; padding: 0 9px; }
+      .input-bar { flex-direction: column; gap: 8px; }
+      .input-controls { justify-content: center; }
+      .message-input { width: 100%; margin-bottom: 8px; }
+    }
+    @media (max-width: 480px) {
+      .header-bar { padding: 0 8px; }
+      .header-title { font-size: 10px; letter-spacing: 1px; }
+      .control-btn { height: 28px; min-width: 45px; font-size: 9px; }
+      .conversation-panel { padding: 8px; }
+      .input-controls { flex-wrap: wrap; gap: 4px; }
     }
   </style>
 </head>
