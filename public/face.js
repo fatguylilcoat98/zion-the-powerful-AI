@@ -89,7 +89,11 @@
       const data = tctx.getImageData(0, 0, imgW, imgH).data;
 
       // Face-ellipse mask — drops the HUD lines and orbital rings outside
-      // the head so we only sample the portrait.
+      // the head so we only sample the portrait. Plus a hard floor at
+      // BOTTOM_Y_CUTOFF — below that line is just the orbital ring
+      // crossing the source image, which would otherwise show up as a
+      // strip of dots below the chin in the render.
+      const BOTTOM_Y_CUTOFF = Math.floor(imgH * 0.82);
       const fx  = FACE_CX * imgW;
       const fy  = FACE_CY * imgH;
       const frx = FACE_RX * imgW;
@@ -97,6 +101,7 @@
 
       const mask = new Uint8Array(imgW * imgH);
       for (let y = 0; y < imgH; y++) {
+        if (y > BOTTOM_Y_CUTOFF) break;
         const ny = (y - fy) / fry;
         for (let x = 0; x < imgW; x++) {
           const nx = (x - fx) / frx;
