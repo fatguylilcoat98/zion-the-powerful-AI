@@ -66,10 +66,14 @@
     const BRIGHTNESS_THRESHOLD = 42;
     const DENSITY_RADIUS = 3;
     const DENSITY_MIN = 14;
+    // Face-ellipse mask — tightened to exclude the orbital ring strip
+    // at the bottom of /face-source.jpg and the HUD text at the sides.
+    // The earlier 0.5/0.5/0.42/0.46 picked up the cyan ring crossing
+    // the lower image — that was the "bottom box of dots" Chris saw.
     const FACE_CX = 0.5;
-    const FACE_CY = 0.5;
-    const FACE_RX = 0.42;
-    const FACE_RY = 0.46;
+    const FACE_CY = 0.46;
+    const FACE_RX = 0.40;
+    const FACE_RY = 0.40;
 
     let particles = null;
 
@@ -319,14 +323,13 @@
 
       // ── Head as a unit ──────────────────────────────────────────────
       // Translation (bob + sway) plus a roll rotation around the centroid.
-      // Real heads tilt and pitch constantly while talking, not just bob.
-      // The roll has an always-on idle component so the head feels alive
-      // even when quiet, plus a voice-driven beat that lands on speech.
-      const headBob       = smoothedVoice * 6.5;
-      const headSway      = smoothedVoice * 2.2 * Math.sin(tSec * 0.9);
-      const headRollIdle  = Math.sin(tSec * 0.55) * 0.014
-                          + Math.sin(tSec * 0.37 + 1.3) * 0.008;
-      const headRollTalk  = smoothedVoice * 0.04 * Math.sin(tSec * 2.1);
+      // Bigger amplitudes so head motion reads from across the room — a
+      // real talking head moves a lot more than people think.
+      const headBob       = smoothedVoice * 12;
+      const headSway      = smoothedVoice * 4.5 * Math.sin(tSec * 0.9);
+      const headRollIdle  = Math.sin(tSec * 0.55) * 0.018
+                          + Math.sin(tSec * 0.37 + 1.3) * 0.010;
+      const headRollTalk  = smoothedVoice * 0.06 * Math.sin(tSec * 2.1);
       const headRoll      = headRollIdle + headRollTalk;
       const cosR = Math.cos(headRoll), sinR = Math.sin(headRoll);
 
@@ -346,11 +349,10 @@
 
       // ── Mouth-shape variation ───────────────────────────────────────
       // Real mouths don't just open/close on voice level — they form
-      // different shapes for different vowels. Approximated here by a
-      // medium-fast oscillator scaled by voice, modulating lateral lip
-      // spread (positive = wider, negative = rounder) and jaw amplitude.
+      // different shapes for different vowels. Bumped lateral spread so
+      // the lip actually deforms visibly between syllables.
       const mouthShape = Math.sin(tSec * 4.7) + 0.6 * Math.sin(tSec * 7.3 + 1.9);
-      const mouthWide  = voice * 3.0 * mouthShape;       // lateral spread/round
+      const mouthWide  = voice * 8.0 * mouthShape;       // lateral spread/round
       const jawJitter  = 1 + 0.35 * mouthShape;          // per-syllable size variation
 
       // ── Asymmetry biases ────────────────────────────────────────────
@@ -392,11 +394,12 @@
         const CHIN_N      = 0.92;
         const SPAN        = CHIN_N - UPPER_LIP_N;
         // Each dot has its own oscillator — these scalars set the base
-        // tempo all dots share, modulated per-dot by phF[i].
-        const baseOmegaA = 2 * Math.PI * 1.1;
-        const baseOmegaB = 2 * Math.PI * 1.7;
+        // tempo all dots share, modulated per-dot by phF[i]. Slower
+        // than before — real facial muscles don't fire at 1+ Hz.
+        const baseOmegaA = 2 * Math.PI * 0.7;
+        const baseOmegaB = 2 * Math.PI * 1.1;
         // Always-on tiny personal motion (so even a quiet dot is moving).
-        const ambientAmp = 0.9;
+        const ambientAmp = 1.4;
         for (let i = 0; i < n; i++) {
           // ── Per-particle PERSONAL oscillation ─────────────────────
           // Each dot dances on its own. Its phase, frequency, and
@@ -431,16 +434,22 @@
           //    by voice. We add it to (a) per-dot personal motion as
           //    AMPLITUDE, and (b) a small directional bias for shape.
 
+          // ── EXPRESSIONS NOW DOMINATE ────────────────────────────
+          // Previous balance had per-dot motion equal to directional
+          // bias, so the face jittered without forming expression
+          // shapes. Now: big directional bias = visible expression;
+          // smaller per-dot amp = individual flavor on top.
+
           // Mouth: jaw drop band (below upper lip → chin)
           if (yNorm > UPPER_LIP_N && yNorm < CHIN_N + 0.04) {
             const tt = Math.min(1, (yNorm - UPPER_LIP_N) / SPAN);
             const jaw = mouthHw * Math.sin(tt * Math.PI * 0.5);
-            // Each dot oscillates more — gestalt = mouth area dancing
-            dDx += persX * voice * 6 * jaw * jawJitter;
-            dDy += persY * voice * 6 * jaw * jawJitter;
-            // Tiny directional bias DOWN so the average opens the jaw
-            dDy += voice * 3.5 * jaw * jawJitter;
-            // Lateral spread/round per dot, with per-dot variation
+            // BIG downward bias — chin actually drops on speech.
+            dDy += voice * 22 * jaw * jawJitter;
+            // Small per-dot oscillation so the surface still dances.
+            dDx += persX * voice * 2.5 * jaw;
+            dDy += persY * voice * 2.5 * jaw;
+            // Lateral spread/round per dot, with per-dot variation.
             dDx += xRel * mouthWide * jaw * (0.7 + 0.6 * oscA);
           }
 
@@ -449,45 +458,46 @@
           const ulKernel = Math.max(0, 1 - Math.abs(ulDist) / 0.05);
           if (yNorm < LIP_Y && ulKernel > 0) {
             const ul = mouthHw * ulKernel;
-            dDx += persX * voice * 3 * ul;
-            dDy += persY * voice * 3 * ul;
-            dDy -= voice * 1.8 * ul;  // small upward bias
+            // Real lift, not a shimmer.
+            dDy -= voice * 10 * ul;
+            dDx += persX * voice * 1.2 * ul;
+            dDy += persY * voice * 1.2 * ul;
           }
 
-          // Brow band (asymmetric)
+          // Brow band (asymmetric) — biggest contributor to expression.
           if (yNorm > BROW_TOP && yNorm < BROW_BOT) {
             const bk = Math.sin((yNorm - BROW_TOP) / (BROW_BOT - BROW_TOP) * Math.PI);
             const sideFactor = 1 + side * browAsym;
             const brow = faceHw * bk * sideFactor;
-            dDx += persX * smoothedVoice * 5 * brow;
-            dDy += persY * smoothedVoice * 5 * brow;
-            dDy -= smoothedVoice * 2.0 * brow;  // upward bias
+            dDy -= smoothedVoice * 8 * brow;          // visible brow lift
+            dDx += persX * smoothedVoice * 1.5 * brow;
+            dDy += persY * smoothedVoice * 1.5 * brow;
           }
 
           // Forehead band — wakes up correlated with brow
           if (yNorm > FOREHEAD_TOP && yNorm < FOREHEAD_BOT) {
             const fk = Math.sin((yNorm - FOREHEAD_TOP) / (FOREHEAD_BOT - FOREHEAD_TOP) * Math.PI);
             const fore = faceHw * fk;
-            dDx += persX * smoothedVoice * 3 * fore;
-            dDy += persY * smoothedVoice * 3 * fore;
-            dDy += smoothedVoice * 0.8 * fore;  // tiny downward (furrow)
+            dDy += smoothedVoice * 3.0 * fore;        // furrow (skin tug down)
+            dDx += persX * smoothedVoice * 1.0 * fore;
+            dDy += persY * smoothedVoice * 1.0 * fore;
           }
 
-          // Cheek band (asymmetric)
+          // Cheek band (asymmetric) — pulls up on speech.
           if (yNorm > CHEEK_TOP && yNorm < CHEEK_BOT && Math.abs(xRel) > 0.30) {
             const ck = Math.sin((yNorm - CHEEK_TOP) / (CHEEK_BOT - CHEEK_TOP) * Math.PI);
             const sideFactor = 1 + side * cheekAsym;
             const cheek = ck * sideFactor;
-            dDx += persX * smoothedVoice * 4 * cheek;
-            dDy += persY * smoothedVoice * 4 * cheek;
-            dDy -= smoothedVoice * 1.4 * cheek;  // upward bias
+            dDy -= smoothedVoice * 5.5 * cheek;       // visible cheek lift
+            dDx += persX * smoothedVoice * 1.4 * cheek;
+            dDy += persY * smoothedVoice * 1.4 * cheek;
           }
 
           // Nose / nostril band (central column)
           if (yNorm > NOSE_TOP && yNorm < NOSE_BOT && Math.abs(xRel) < 0.18) {
-            dDx += persX * smoothedVoice * 2.5;
-            dDy += persY * smoothedVoice * 2.5;
-            dDx += side * smoothedVoice * 0.6;  // tiny outward bias
+            dDx += side * smoothedVoice * 1.6;        // outward nostril flare
+            dDx += persX * smoothedVoice * 0.8;
+            dDy += persY * smoothedVoice * 0.8;
           }
 
           // ── Eyes ───────────────────────────────────────────────
