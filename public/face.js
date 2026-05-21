@@ -1,33 +1,26 @@
 /*
-  Zion — Particle Face v12 (Stages 2 + 3 + 4, cinematic).
+  Zion — Particle Face v13 (lylo face source, runtime-sampled).
 
-  Pipeline:
-    hidden   -> CONVERSE click  -> forming   (~2.8s spiral inward from scatter)
-    forming  -> auto            -> live      (idle breathing + voice-driven motion)
-    live     -> CONVERSE off    -> dissolving(~2.0s spiral outward + fade)
+  Source of truth: /face-source.jpg (the cyan stipple portrait Chris
+  approved on lylo). On load we sample it once with the same pipeline
+  lylo's ParticleFace uses — face-ellipse mask + cyan/brightness
+  threshold + neighbor-density filter — and build the per-dot arrays
+  the renderer below needs. No more precomputed JSON stipple files.
+
+  Phase machine (unchanged from v12):
+    hidden     -> CONVERSE on   -> forming   (~2.8s spiral inward from scatter)
+    forming    -> auto          -> live      (idle breathing + voice-driven motion)
+    live       -> CONVERSE off  -> dissolving(~2.0s spiral outward + fade)
     dissolving -> auto          -> hidden    (orb returns)
 
-  Per-dot precomputation at load:
-    - home position (xs, ys) and brightness (bs) from the stipple data
-    - polar coords of the home position relative to the bbox center
-      (rH, thH) — used by formation/dissolution as the target/origin
-    - scatter polar (rS, thS) — a random point outside the face envelope
-      where the dot starts (formation) or ends up (dissolution)
-    - phA, phB — phase offsets for the live-state Lissajous breathing
-      orbit, derived from home coords so neighbors drift together
-
-  Per frame:
-    Pass 1: for each dot, compute its current image-space position
-            based on the active phase (formation spiral / live orbit+
-            voice / dissolution spiral). Stash in scratch arrays.
-    Pass 2: bucketed draws — group by brightness so we set fillStyle 8x
-            instead of 17000x.
-
-  Voice: window.__voiceLevel (0..1, smoothed FFT, already populated by
-  zion-interface.html). During live, voice:
-    - amplifies the per-dot orbit amplitude (so whole face responds)
-    - boosts the global breath/inflation scale slightly
-    - adds a jaw-drop bias for dots in the lower face on speech peaks
+  Voice (window.__voiceLevel, 0..1, populated by zion-interface.html)
+  drives, during live:
+    - whole-head bob (uniform Y translation, reads as nodding into words)
+    - lower-face jaw drop + upper-lip lift (mouth opens like a mouth)
+    - whole-face incoherent shimmer (sparkle, not wave streaks)
+    - teal -> aqua-white color shift + alpha boost
+  Everything is gated on smoothedVoice (lowpass envelope) so it tracks
+  talking *activity*, not per-phoneme amplitude spikes.
 */
 
 (function () {
@@ -38,7 +31,7 @@
 
     const orbCanvas    = document.getElementById('orbCanvas');
     const neuralCenter = document.querySelector('.neural-center');
-    if (!neuralCenter) { console.warn('[face v12] neural-center missing'); return; }
+    if (!neuralCenter) { console.warn('[face v13] neural-center missing'); return; }
 
     const faceCanvas = document.createElement('canvas');
     faceCanvas.id = 'faceCanvas';
@@ -47,7 +40,7 @@
 
     const ctx = faceCanvas.getContext('2d');
     if (!ctx) {
-      console.warn('[face v12] 2D context unavailable');
+      console.warn('[face v13] 2D context unavailable');
       neuralCenter.removeChild(faceCanvas);
       return;
     }
@@ -66,86 +59,175 @@
     window.addEventListener('resize', resize);
     resize();
 
-    // Cache-buster — Render's CDN / browser HTTP cache was holding onto an
-    // older copy of the data files past a deploy. Bump this on every data
-    // change so clients always pull the fresh stipple.
-    const cb = '?v=v16';
+    // Sampling knobs — mirror lylo/components/ParticleFace.tsx defaults so
+    // the look is identical to the /face route on the site.
+    const SAMPLE_STEP = 2;
+    const CYAN_THRESHOLD = 10;
+    const BRIGHTNESS_THRESHOLD = 42;
+    const DENSITY_RADIUS = 3;
+    const DENSITY_MIN = 14;
+    const FACE_CX = 0.5;
+    const FACE_CY = 0.5;
+    const FACE_RX = 0.42;
+    const FACE_RY = 0.46;
+
     let particles = null;
-    Promise.all([
-      fetch('/zion-particle-meta.json' + cb).then(r => { if (!r.ok) throw new Error('meta ' + r.status); return r.json(); }),
-      fetch('/zion-particle-data-1.json' + cb).then(r => { if (!r.ok) throw new Error('part1 ' + r.status); return r.json(); }),
-      fetch('/zion-particle-data-2.json' + cb).then(r => { if (!r.ok) throw new Error('part2 ' + r.status); return r.json(); }),
-      fetch('/zion-particle-data-3.json' + cb).then(r => { if (!r.ok) throw new Error('part3 ' + r.status); return r.json(); }),
-    ]).then(([meta, a, b, c]) => {
-      const all = a.concat(b, c);
-      const n = all.length;
-      const imgW = meta.bbox.w, imgH = meta.bbox.h;
+
+    function samplePixelsToParticles(img) {
+      const imgW = img.naturalWidth;
+      const imgH = img.naturalHeight;
+      const tmp = document.createElement('canvas');
+      tmp.width = imgW;
+      tmp.height = imgH;
+      const tctx = tmp.getContext('2d', { willReadFrequently: true });
+      if (!tctx) return null;
+      tctx.drawImage(img, 0, 0);
+      const data = tctx.getImageData(0, 0, imgW, imgH).data;
+
+      // Face-ellipse mask — drops the HUD lines and orbital rings outside
+      // the head so we only sample the portrait.
+      const fx  = FACE_CX * imgW;
+      const fy  = FACE_CY * imgH;
+      const frx = FACE_RX * imgW;
+      const fry = FACE_RY * imgH;
+
+      const mask = new Uint8Array(imgW * imgH);
+      for (let y = 0; y < imgH; y++) {
+        const ny = (y - fy) / fry;
+        for (let x = 0; x < imgW; x++) {
+          const nx = (x - fx) / frx;
+          if (nx * nx + ny * ny > 1) continue;
+          const i = (y * imgW + x) * 4;
+          const r = data[i];
+          const g = data[i + 1];
+          const b = data[i + 2];
+          const cyan = (g + b) * 0.5 - r;
+          const brightness = (r + g + b) / 3;
+          if (cyan > CYAN_THRESHOLD && brightness > BRIGHTNESS_THRESHOLD) {
+            mask[y * imgW + x] = 1;
+          }
+        }
+      }
+
+      // Neighbor-density filter — keeps stipple clusters, drops lone
+      // speckles so the face reads as a solid surface.
+      const dr = DENSITY_RADIUS;
+      const homeX = [];
+      const homeY = [];
+      const homeB = [];
+      for (let y = 0; y < imgH; y += SAMPLE_STEP) {
+        for (let x = 0; x < imgW; x += SAMPLE_STEP) {
+          if (!mask[y * imgW + x]) continue;
+          if (x < dr || y < dr || x >= imgW - dr || y >= imgH - dr) continue;
+          let count = 0;
+          for (let dy = -dr; dy <= dr; dy++) {
+            const row = (y + dy) * imgW;
+            for (let dx = -dr; dx <= dr; dx++) {
+              count += mask[row + x + dx];
+            }
+          }
+          if (count < DENSITY_MIN) continue;
+
+          const i = (y * imgW + x) * 4;
+          const b01 = (data[i] + data[i + 1] + data[i + 2]) / (3 * 255);
+          // Boost low-brightness pixels so they still register against the
+          // dark background (same compression lylo uses).
+          homeX.push(x);
+          homeY.push(y);
+          homeB.push(Math.min(1, 0.35 + b01 * 0.85));
+        }
+      }
+
+      const n = homeX.length;
+      if (!n) return null;
+
       const cxImg = imgW * 0.5;
       const cyImg = imgH * 0.5;
 
-      const xs = new Float32Array(n), ys = new Float32Array(n), bs = new Float32Array(n);
-      const phA = new Float32Array(n), phB = new Float32Array(n);
-      const rH = new Float32Array(n), thH = new Float32Array(n);
-      // Scatter is parameterized so it remaps to the *canvas* each frame
+      const xs  = new Float32Array(n);
+      const ys  = new Float32Array(n);
+      const bs  = new Float32Array(n);
+      const phA = new Float32Array(n);
+      const phB = new Float32Array(n);
+      const rH  = new Float32Array(n);
+      const thH = new Float32Array(n);
+      // Scatter is parameterized so it remaps to the canvas each frame
       // (responsive to viewport). thS = angle, sf = 0..1 radial factor.
-      const thS = new Float32Array(n), sf = new Float32Array(n);
+      const thS = new Float32Array(n);
+      const sf  = new Float32Array(n);
 
       for (let i = 0; i < n; i++) {
-        const x = all[i][0], y = all[i][1];
+        const x = homeX[i];
+        const y = homeY[i];
         xs[i] = x;
         ys[i] = y;
-        bs[i] = all[i][2];
+        bs[i] = homeB[i];
 
-        // Live-state orbit phases — spatially coherent (neighbors drift together)
+        // Live-state orbit phases — spatially coherent so neighbors drift
+        // together (gives the breathing surface its quiet life).
         phA[i] = Math.sin(x * 0.011 + y * 0.013) * 7;
         phB[i] = Math.cos(x * 0.013 + y * 0.011) * 7;
 
-        // Polar coords of home position relative to bbox center
-        const dx = x - cxImg, dy = y - cyImg;
+        const dx = x - cxImg;
+        const dy = y - cyImg;
         rH[i]  = Math.sqrt(dx * dx + dy * dy);
         thH[i] = Math.atan2(dy, dx);
 
-        // Scatter angle + radial factor (resolved against canvas at render time)
         thS[i] = Math.random() * Math.PI * 2;
         sf[i]  = Math.random();
       }
 
-      // Scratch arrays for per-frame computed positions (canvas space)
       const px = new Float32Array(n);
       const py = new Float32Array(n);
 
-      particles = {
+      return {
         x: xs, y: ys, b: bs,
         phA, phB, rH, thH, thS, sf,
         px, py,
         imgW, imgH, cxImg, cyImg,
         count: n,
       };
-      console.log('[face v12] loaded ' + n + ' stipple dots (bbox ' + imgW + 'x' + imgH + ')');
-    }).catch(err => {
-      console.warn('[face v12] particle data fetch failed:', err.message);
-      if (faceCanvas.parentNode) faceCanvas.parentNode.removeChild(faceCanvas);
-    });
+    }
+
+    const faceImg = new Image();
+    faceImg.crossOrigin = 'anonymous';
+    faceImg.decoding = 'async';
+    faceImg.onload = () => {
+      try {
+        particles = samplePixelsToParticles(faceImg);
+        if (!particles) {
+          console.warn('[face v13] no particles after sampling face-source.jpg');
+          return;
+        }
+        console.log('[face v13] sampled ' + particles.count + ' dots from /face-source.jpg ('
+          + particles.imgW + 'x' + particles.imgH + ')');
+      } catch (err) {
+        console.warn('[face v13] sampling failed:', err && err.message);
+      }
+    };
+    faceImg.onerror = () => {
+      console.warn('[face v13] failed to load /face-source.jpg');
+    };
+    // Cache-buster — bump on every face-source change so clients always
+    // pull the fresh portrait past Render's CDN / browser HTTP cache.
+    faceImg.src = '/face-source.jpg?v=v13';
 
     // Phase state machine
-    const FORM_DURATION = 2.8;     // seconds for spiral-in
-    const DISSOLVE_DURATION = 2.0; // seconds for spiral-out
+    const FORM_DURATION = 2.8;
+    const DISSOLVE_DURATION = 2.0;
     const FORM_FADE_IN = 0.6;
-    const DISSOLVE_HOLD = 0.5;     // hold full alpha at start of dissolve
-    // Whole-number extra rotations so dots land EXACTLY on their home angle
-    // at p=1 (a fractional spin count rotates the whole face off-axis).
+    const DISSOLVE_HOLD = 0.5;
+    // Whole-number extra rotations so dots land exactly on their home
+    // angle at p=1 (a fractional spin count rotates the whole face off-axis).
     const EXTRA_SPINS = 1;
     const EXTRA_TWO_PI = EXTRA_SPINS * 2 * Math.PI;
 
     let phase = 'hidden';
     let phaseStart = performance.now();
-    // Smoothed voice envelope — low-pass filter over the raw FFT level so
-    // whole-head motion tracks vocal *activity*, not every microsecond
-    // amplitude blip. This is what drives the head bob; without smoothing
-    // the head would jitter on every phoneme (which read as the "wave").
+    // Smoothed voice envelope — low-pass over the raw FFT level so
+    // whole-head motion tracks vocal *activity*, not per-phoneme blips.
     let smoothedVoice = 0;
 
-    // Easing
     function easeOutCubic(t) { const u = 1 - t; return 1 - u * u * u; }
     function easeInCubic(t)  { return t * t * t; }
 
@@ -154,7 +236,6 @@
       const t   = (now - phaseStart) / 1000;
       const converse = !!window.__converseActive;
 
-      // Transitions
       if (phase === 'hidden' && converse && particles) {
         phase = 'forming';
         phaseStart = now;
@@ -166,7 +247,7 @@
       } else if ((phase === 'forming' || phase === 'live') && !converse) {
         phase = 'dissolving';
         phaseStart = now;
-        // Reroll scatter angles + factors so dissolve doesn't mirror the entry
+        // Reroll scatter angles + factors so dissolve doesn't mirror entry.
         const n = particles.count;
         const thS = particles.thS, sf = particles.sf;
         for (let i = 0; i < n; i++) {
@@ -191,20 +272,15 @@
       const imgW = particles.imgW, imgH = particles.imgH;
       const cxImg = particles.cxImg, cyImg = particles.cyImg;
 
-      // Canvas projection: face centroid at canvas center, scaled to fit.
       const padding = 0.95;
       const scale = Math.min(w / imgW, h / imgH) * padding;
       const cX = w * 0.5;
       const cY = h * 0.5;
 
-      // Scatter ring sized to the canvas: dots arrive from somewhere
-      // between the face envelope (~half the smaller canvas dim) and the
-      // canvas edge — so they're visible at formP=0 instead of off-screen.
       const minDim = Math.min(w, h);
       const SCATTER_MIN = minDim * 0.55;
       const SCATTER_SPREAD = minDim * 0.22;
 
-      // Phase-dependent globals
       let alpha = 1;
       let phaseKind = phase;
       let formP = 0, dissP = 0;
@@ -219,30 +295,21 @@
       }
 
       const voice = (typeof window !== 'undefined' && window.__voiceLevel) ? window.__voiceLevel : 0;
-      // Smoothed envelope: ~85ms rise, ~250ms fall. Slow enough to be a
-      // talking-activity signal, not a per-phoneme tracker.
+      // ~85ms rise, ~250ms fall — talking-activity signal, not per-phoneme.
       smoothedVoice = smoothedVoice * 0.88 + voice * 0.12;
       const tSec = now * 0.001;
-      // Head bob — uniform Y translation of the whole face. Dips down while
-      // Zion is actively talking, eases back when quiet. Reads as a person
-      // nodding into their words, not a particle wave.
+      // Whole-head bob — uniform Y translation. Reads as Zion nodding into
+      // his words, not a particle wave.
       const headBob = smoothedVoice * 7.0;
 
-      // Live-state idle motion — keeps the whole face alive when quiet.
-      // The talking motion (jaw drop / lip split / lower-face shimmer) is
-      // applied separately and ONLY to the lower face, so the upper face
-      // stays still when Zion speaks (otherwise the whole face waves).
       const orbOmega = 2 * Math.PI * 0.4;
       const orbPhase = tSec * orbOmega;
       const idleAmp = 2.5;
-      // Breath: subtle wobble only — no voice-driven inflation (it was
-      // pumping the whole face on each word, contributing to the wave look).
       const breathLive = 1 + 0.015 * Math.sin(tSec * 2 * Math.PI * 0.25);
       const breath = phase === 'live' ? breathLive : 1;
       const sX = scale * breath;
       const sY = scale * breath;
 
-      // Precomputed transit eased progress for the dot loop
       const formEased = phase === 'forming' ? easeOutCubic(formP) : 0;
       const dissEased = phase === 'dissolving' ? easeInCubic(dissP) : 0;
 
@@ -253,54 +320,37 @@
       const thS = particles.thS, sf = particles.sf;
       const pxArr = particles.px, pyArr = particles.py;
 
-      // Pass 1: compute per-dot CANVAS-space positions
       if (phaseKind === 'live') {
-        // In live, we render the dot's home (+ orbit + voice) in image space,
-        // then project through the breath-scaled (sX, sY) at draw time.
-        // Stash image-space positions; pass 2 projects them.
         const imgHinv = 1 / imgH;
         const halfW = imgW * 0.5;
-        // Real, proportional mouth + jaw. A central-column influence
-        // (Gaussian in x) keeps the motion on the mouth/jaw and tapers it
-        // to nothing at the cheeks and face edges — so no full-width bar.
-        // A smooth sin-eased vertical profile gives a clean opening with
-        // no banding — so no bright square. No eye/brow/cheek/forehead
-        // overlays; just a mouth that opens like a mouth.
-        const UPPER_LIP_N = 0.70;  // y_norm where the opening starts
-        const CHIN_N      = 0.99;  // y_norm at the bottom of the jaw
-        const LIP_Y       = 0.74;  // upper-lip lift center
+        // Real, proportional mouth + jaw. Central-column Gaussian in x
+        // keeps motion on the mouth/jaw and tapers to nothing at the
+        // cheeks; sin-eased vertical profile = smooth open, no banding.
+        const UPPER_LIP_N = 0.70;
+        const CHIN_N      = 0.99;
+        const LIP_Y       = 0.74;
         const SPAN        = CHIN_N - UPPER_LIP_N;
         for (let i = 0; i < n; i++) {
-          // Idle breathing — every dot, voice-independent
           const idleDx = idleAmp * Math.sin(orbPhase + phA[i]);
           const idleDy = idleAmp * Math.sin(orbPhase + phB[i]);
 
           const yNorm = ys[i] * imgHinv;
-          const xRel = (xs[i] - halfW) / halfW; // -1..1 across the face
-          // Central-column weight: ~1 at the midline, ~0.03 at the edges.
-          // This is what stops the cheeks / jaw-sides forming a bar.
+          const xRel = (xs[i] - halfW) / halfW;
           const hw = Math.exp(-xRel * xRel * 3.4);
 
-          // Jaw / lower-lip opening: zero above the upper lip, smoothly
-          // rising (sin ease) to a max near the chin. No hard band.
           let jawOpen = 0;
           if (yNorm > UPPER_LIP_N) {
             const tt = Math.min(1, (yNorm - UPPER_LIP_N) / SPAN);
             jawOpen = voice * 16 * hw * Math.sin(tt * Math.PI * 0.5);
           }
 
-          // Upper-lip lift — small upward motion in a narrow band just
-          // above the lip line, central column only.
           const ulDist = yNorm - LIP_Y;
           const ulKernel = Math.max(0, 1 - Math.abs(ulDist) / 0.045);
           const upperLip = (yNorm < LIP_Y) ? -voice * 4 * hw * ulKernel : 0;
 
-          // Whole-face liveliness shimmer — INCOHERENT (phase seeded by
-          // index, not spatial position) so neighbors don't move together:
-          // no diagonal wave streaks. Subtle.
-          // Whole-face "dance" — INCOHERENT per-dot jitter (phase seeded by
+          // Whole-face dance — incoherent per-dot jitter (phase seeded by
           // index, not position) so it sparkles instead of forming wave
-          // streaks. Amplitude scales hard with voice so the whole face
+          // streaks. Amplitude scales hard with voice so the whole head
           // visibly comes alive while Zion speaks, then settles when quiet.
           const danceAmp = smoothedVoice * 6.0;
           const liveX = danceAmp * Math.sin(tSec * 9.3 + i * 0.71);
@@ -333,18 +383,14 @@
         }
       }
 
-      // Pass 2: bucketed draws
-      const dpr = window.devicePixelRatio || 1;
-      const pSize = Math.max(1.0, 1.4); // 1.4 css px regardless of dpr
+      const pSize = 1.4;
       const half = pSize * 0.5;
 
-      // Voice-reactive color: idle is the calm teal; while Zion speaks the
-      // dots brighten and shift toward an electric aqua-white, plus an
-      // alpha boost so the whole face visibly lights up when talking.
+      // Voice-reactive color: idle teal -> aqua-white while Zion speaks.
       const talk = Math.min(1, smoothedVoice * 1.5);
-      const cr = (talk * 165) | 0;          // 0   -> 165
-      const cg = (220 + talk * 35) | 0;     // 220 -> 255
-      const cbl = (240 + talk * 12) | 0;    // 240 -> 252
+      const cr  = (talk * 165) | 0;        // 0   -> 165
+      const cg  = (220 + talk * 35) | 0;   // 220 -> 255
+      const cbl = (240 + talk * 12) | 0;   // 240 -> 252
       const aBoost = 1 + talk * 0.55;
       const colPrefix = 'rgba(' + cr + ', ' + cg + ', ' + cbl + ', ';
 
@@ -369,7 +415,7 @@
     }
 
     requestAnimationFrame(frame);
-    console.log('[face v12] stages 2+3+4 init — forming/live/dissolving with voice');
+    console.log('[face v13] init — runtime-sampled lylo face, CONVERSE-gated swarm');
   }
 
   if (document.readyState === 'loading') {
