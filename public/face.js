@@ -147,15 +147,25 @@
       const xs  = new Float32Array(n);
       const ys  = new Float32Array(n);
       const bs  = new Float32Array(n);
-      const phA = new Float32Array(n);
-      const phB = new Float32Array(n);
-      const rH  = new Float32Array(n);
-      const thH = new Float32Array(n);
+      // Per-particle INDEPENDENT motion seeds. Each dot gets its own
+      // phase, frequency multiplier, direction vector, and blink-timing
+      // offset. The whole point: neighboring dots no longer move in
+      // lockstep — region kernels modulate the *amplitude* of each
+      // dot's personal dance, they don't translate slabs.
+      const phA  = new Float32Array(n);    // primary phase
+      const phB  = new Float32Array(n);    // secondary phase (different freq)
+      const phF  = new Float32Array(n);    // freq multiplier 0.6..1.7
+      const dxU  = new Float32Array(n);    // personal x unit vector
+      const dyU  = new Float32Array(n);    // personal y unit vector
+      const blnk = new Float32Array(n);    // blink-timing offset 0..1
+      const rH   = new Float32Array(n);
+      const thH  = new Float32Array(n);
       // Scatter is parameterized so it remaps to the canvas each frame
       // (responsive to viewport). thS = angle, sf = 0..1 radial factor.
-      const thS = new Float32Array(n);
-      const sf  = new Float32Array(n);
+      const thS  = new Float32Array(n);
+      const sf   = new Float32Array(n);
 
+      const TAU = Math.PI * 2;
       for (let i = 0; i < n; i++) {
         const x = homeX[i];
         const y = homeY[i];
@@ -163,17 +173,24 @@
         ys[i] = y;
         bs[i] = homeB[i];
 
-        // Live-state orbit phases — spatially coherent so neighbors drift
-        // together (gives the breathing surface its quiet life).
-        phA[i] = Math.sin(x * 0.011 + y * 0.013) * 7;
-        phB[i] = Math.cos(x * 0.013 + y * 0.011) * 7;
+        // Pure random phases — each particle dances on its own clock.
+        phA[i] = Math.random() * TAU;
+        phB[i] = Math.random() * TAU;
+        phF[i] = 0.6 + Math.random() * 1.1;     // 0.6..1.7
+        // Personal direction: a random unit-ish vector. Each dot has a
+        // preferred axis of motion, so even when many dots share the
+        // same region influence they don't all move the same direction.
+        const theta = Math.random() * TAU;
+        dxU[i] = Math.cos(theta);
+        dyU[i] = Math.sin(theta);
+        blnk[i] = Math.random();                // 0..1 stagger for blink
 
         const dx = x - cxImg;
         const dy = y - cyImg;
         rH[i]  = Math.sqrt(dx * dx + dy * dy);
         thH[i] = Math.atan2(dy, dx);
 
-        thS[i] = Math.random() * Math.PI * 2;
+        thS[i] = Math.random() * TAU;
         sf[i]  = Math.random();
       }
 
@@ -182,7 +199,8 @@
 
       return {
         x: xs, y: ys, b: bs,
-        phA, phB, rH, thH, thS, sf,
+        phA, phB, phF, dxU, dyU, blnk,
+        rH, thH, thS, sf,
         px, py,
         imgW, imgH, cxImg, cyImg,
         count: n,
@@ -341,9 +359,6 @@
       const browAsym  = 0.45 * Math.sin(tSec * 0.83);    // -0.45..0.45
       const cheekAsym = 0.35 * Math.sin(tSec * 0.62 + 1.6);
 
-      const orbOmega = 2 * Math.PI * 0.4;
-      const orbPhase = tSec * orbOmega;
-      const idleAmp = 2.5;
       const breathLive = 1 + 0.015 * Math.sin(tSec * 2 * Math.PI * 0.25);
       const breath = phase === 'live' ? breathLive : 1;
       const sX = scale * breath;
@@ -354,7 +369,8 @@
 
       const n = particles.count;
       const xs = particles.x, ys = particles.y;
-      const phA = particles.phA, phB = particles.phB;
+      const phA = particles.phA, phB = particles.phB, phF = particles.phF;
+      const dxU = particles.dxU, dyU = particles.dyU, blnk = particles.blnk;
       const rH = particles.rH, thH = particles.thH;
       const thS = particles.thS, sf = particles.sf;
       const pxArr = particles.px, pyArr = particles.py;
@@ -364,7 +380,7 @@
         const halfW = imgW * 0.5;
         // Face-region landmarks in image-normalized y. Tuned for the
         // lylo face-source.jpg portrait — forehead 0.18..0.32, brows
-        // 0.32..0.41, eyes 0.38..0.46, nose 0.48..0.62, cheeks 0.50..0.66,
+        // 0.32..0.41, eyes 0.38..0.46, nose 0.48..0.66, cheeks 0.50..0.66,
         // mouth 0.72..0.80, chin 0.92.
         const FOREHEAD_TOP = 0.18, FOREHEAD_BOT = 0.32;
         const BROW_TOP   = 0.32, BROW_BOT  = 0.41;
@@ -375,9 +391,26 @@
         const LIP_Y       = 0.76;
         const CHIN_N      = 0.92;
         const SPAN        = CHIN_N - UPPER_LIP_N;
+        // Each dot has its own oscillator — these scalars set the base
+        // tempo all dots share, modulated per-dot by phF[i].
+        const baseOmegaA = 2 * Math.PI * 1.1;
+        const baseOmegaB = 2 * Math.PI * 1.7;
+        // Always-on tiny personal motion (so even a quiet dot is moving).
+        const ambientAmp = 0.9;
         for (let i = 0; i < n; i++) {
-          const idleDx = idleAmp * Math.sin(orbPhase + phA[i]);
-          const idleDy = idleAmp * Math.sin(orbPhase + phB[i]);
+          // ── Per-particle PERSONAL oscillation ─────────────────────
+          // Each dot dances on its own. Its phase, frequency, and
+          // direction vector are random per-particle — neighbors
+          // do not move in lockstep. This is the core change: region
+          // kernels (below) modulate the AMPLITUDE of this personal
+          // motion, they don't translate slabs.
+          const tA  = tSec * baseOmegaA * phF[i] + phA[i];
+          const tB  = tSec * baseOmegaB * phF[i] + phB[i];
+          const oscA = Math.sin(tA);                  // -1..1, per dot
+          const oscB = Math.cos(tB);                  // -1..1, per dot
+          // Personal motion vector — each dot has its own preferred axis.
+          const persX = dxU[i] * oscA + dyU[i] * oscB * 0.6;
+          const persY = dyU[i] * oscA + dxU[i] * oscB * 0.6;
 
           const yNorm = ys[i] * imgHinv;
           const xRel = (xs[i] - halfW) / halfW;
@@ -385,99 +418,121 @@
           // column), wider for brow/cheek (spans most of the face).
           const mouthHw = Math.exp(-xRel * xRel * 4.5);
           const faceHw  = Math.exp(-xRel * xRel * 1.6);
-          // Side bias: -1 for left half, +1 for right half. Used for
-          // brow/cheek asymmetry so left and right don't mirror.
           const side = xRel >= 0 ? 1 : -1;
 
-          // ── Mouth: jaw drop + upper-lip lift + lateral shape ──
-          // jawJitter modulates amplitude per-syllable so the opening
-          // varies in size instead of pumping monotonically with voice.
-          let jawOpen = 0;
+          // ── Always-on ambient: each dot oscillates a little ──
+          // Replaces the old "spatially coherent breathing surface"
+          // (which moved as one slab) with per-dot motion that reads
+          // as individuals dancing.
+          let dDx = ambientAmp * persX;
+          let dDy = ambientAmp * persY;
+
+          // ── Region influences. Each kernel is a 0..1 weight scaled
+          //    by voice. We add it to (a) per-dot personal motion as
+          //    AMPLITUDE, and (b) a small directional bias for shape.
+
+          // Mouth: jaw drop band (below upper lip → chin)
           if (yNorm > UPPER_LIP_N && yNorm < CHIN_N + 0.04) {
             const tt = Math.min(1, (yNorm - UPPER_LIP_N) / SPAN);
-            jawOpen = voice * 9 * jawJitter * mouthHw * Math.sin(tt * Math.PI * 0.5);
-          }
-          const ulDist = yNorm - LIP_Y;
-          const ulKernel = Math.max(0, 1 - Math.abs(ulDist) / 0.05);
-          const upperLip = (yNorm < LIP_Y) ? -voice * 4 * mouthHw * ulKernel : 0;
-          // Lateral mouth spread/round — applied to mouth-band particles,
-          // pushes them outward (wide vowels) or inward (rounded vowels).
-          let mouthWidthDx = 0;
-          if (yNorm > UPPER_LIP_N - 0.02 && yNorm < CHIN_N) {
-            const mb = Math.sin(Math.min(1, (yNorm - (UPPER_LIP_N - 0.02)) / 0.18) * Math.PI);
-            mouthWidthDx = xRel * mouthWide * mouthHw * mb;
+            const jaw = mouthHw * Math.sin(tt * Math.PI * 0.5);
+            // Each dot oscillates more — gestalt = mouth area dancing
+            dDx += persX * voice * 6 * jaw * jawJitter;
+            dDy += persY * voice * 6 * jaw * jawJitter;
+            // Tiny directional bias DOWN so the average opens the jaw
+            dDy += voice * 3.5 * jaw * jawJitter;
+            // Lateral spread/round per dot, with per-dot variation
+            dDx += xRel * mouthWide * jaw * (0.7 + 0.6 * oscA);
           }
 
-          // ── Brow raise (asymmetric) ──
-          // Eyebrows are the most expressive feature for emphasis.
-          // Asymmetry stops the puppet-symmetric "both brows up exactly"
-          // look that ruins synthetic faces.
-          let browLift = 0;
+          // Upper-lip lift band (just above the lip line)
+          const ulDist = yNorm - LIP_Y;
+          const ulKernel = Math.max(0, 1 - Math.abs(ulDist) / 0.05);
+          if (yNorm < LIP_Y && ulKernel > 0) {
+            const ul = mouthHw * ulKernel;
+            dDx += persX * voice * 3 * ul;
+            dDy += persY * voice * 3 * ul;
+            dDy -= voice * 1.8 * ul;  // small upward bias
+          }
+
+          // Brow band (asymmetric)
           if (yNorm > BROW_TOP && yNorm < BROW_BOT) {
             const bk = Math.sin((yNorm - BROW_TOP) / (BROW_BOT - BROW_TOP) * Math.PI);
             const sideFactor = 1 + side * browAsym;
-            browLift = -smoothedVoice * 3.5 * faceHw * bk * sideFactor;
+            const brow = faceHw * bk * sideFactor;
+            dDx += persX * smoothedVoice * 5 * brow;
+            dDy += persY * smoothedVoice * 5 * brow;
+            dDy -= smoothedVoice * 2.0 * brow;  // upward bias
           }
 
-          // ── Forehead furrow correlated with brow ──
-          // When brows lift, forehead skin tugs down — wrinkle illusion.
-          // Without this the forehead floats while the brows move alone.
-          let foreheadDy = 0;
+          // Forehead band — wakes up correlated with brow
           if (yNorm > FOREHEAD_TOP && yNorm < FOREHEAD_BOT) {
             const fk = Math.sin((yNorm - FOREHEAD_TOP) / (FOREHEAD_BOT - FOREHEAD_TOP) * Math.PI);
-            foreheadDy = smoothedVoice * 1.3 * faceHw * fk;
+            const fore = faceHw * fk;
+            dDx += persX * smoothedVoice * 3 * fore;
+            dDy += persY * smoothedVoice * 3 * fore;
+            dDy += smoothedVoice * 0.8 * fore;  // tiny downward (furrow)
           }
 
-          // ── Cheek lift (asymmetric) ──
-          let cheekLift = 0;
+          // Cheek band (asymmetric)
           if (yNorm > CHEEK_TOP && yNorm < CHEEK_BOT && Math.abs(xRel) > 0.30) {
             const ck = Math.sin((yNorm - CHEEK_TOP) / (CHEEK_BOT - CHEEK_TOP) * Math.PI);
             const sideFactor = 1 + side * cheekAsym;
-            cheekLift = -smoothedVoice * 2.2 * ck * sideFactor;
+            const cheek = ck * sideFactor;
+            dDx += persX * smoothedVoice * 4 * cheek;
+            dDy += persY * smoothedVoice * 4 * cheek;
+            dDy -= smoothedVoice * 1.4 * cheek;  // upward bias
           }
 
-          // ── Nose / nostril micro-motion ──
-          // Tiny lateral flare of central-column dots in the nose band
-          // on voice peaks. Reads as nostril life, not a pulse.
-          let noseDx = 0;
+          // Nose / nostril band (central column)
           if (yNorm > NOSE_TOP && yNorm < NOSE_BOT && Math.abs(xRel) < 0.18) {
-            noseDx = side * smoothedVoice * 0.9;
+            dDx += persX * smoothedVoice * 2.5;
+            dDy += persY * smoothedVoice * 2.5;
+            dDx += side * smoothedVoice * 0.6;  // tiny outward bias
           }
 
-          // ── Eye saccades + emphasis squint + blink ──
-          // Saccades are the small constant micro-movements eyes always
-          // do. Squint compresses the eye band partially on emphasis.
-          // Blink is a separate hard pulse from the autonomic timer.
-          let eyeDx = 0, eyeDy = 0;
+          // ── Eyes ───────────────────────────────────────────────
+          // Saccades become per-dot drift; squint becomes per-dot
+          // inward bias scaled by voice; blink is a per-dot sweep
+          // with TIMING STAGGER so dots arrive in waves, not in unison.
           if (yNorm > EYE_TOP && yNorm < EYE_BOT) {
-            eyeDx += eyeDriftX;
-            eyeDy += eyeDriftY;
-            // Squint: partial compression toward EYE_CY scaled by voice
-            eyeDy += (EYE_CY - yNorm) * imgH * eyeSquint;
-          }
-          if (blinkAmt > 0 && yNorm > EYE_TOP && yNorm < EYE_BOT) {
-            eyeDy += (EYE_CY - yNorm) * imgH * blinkAmt * 0.55;
+            // Per-dot saccade drift — each eye dot drifts on its own
+            dDx += eyeDriftX * (0.6 + 0.8 * oscA);
+            dDy += eyeDriftY * (0.6 + 0.8 * oscB);
+            // Squint — partial inward bias, jittered per dot so dots
+            // don't pile up on the eye-center line.
+            const sq = (EYE_CY - yNorm) * imgH * eyeSquint;
+            dDy += sq * (0.7 + 0.6 * oscA);
+            dDx += sq * 0.25 * oscB;  // lateral component so dots spread
+            // Eyelid dance — every eye dot has constant tiny motion
+            // even when not blinking (lashes/lids never truly still).
+            dDx += persX * 0.8;
+            dDy += persY * 0.8;
           }
 
-          // ── Whole-face shimmer ──
-          // Incoherent per-dot jitter (phase seeded by index) so it
-          // sparkles instead of forming wave streaks. The "alive" base.
-          const danceAmp = smoothedVoice * 3.0;
-          const liveX = danceAmp * Math.sin(tSec * 9.3 + i * 0.71);
-          const liveY = danceAmp * Math.cos(tSec * 11.1 + i * 0.91);
+          // Blink — per-dot staggered sweep. Each dot starts its blink
+          // motion at a slightly different time (blnk[i] offsets it
+          // into the cycle), moves with its own vector toward the
+          // eye-center line, and adds a lateral component so dots don't
+          // stack into a bright bar.
+          if (blinkAmt > 0 && yNorm > EYE_TOP && yNorm < EYE_BOT) {
+            const stagger = blnk[i] * 0.25;            // up to 0.25 of pulse
+            const dotBlink = Math.max(0, blinkAmt - stagger);
+            const toCenter = (EYE_CY - yNorm) * imgH;
+            // 0.4 instead of 0.55 — gentler, so dots don't pile up
+            dDy += toCenter * dotBlink * 0.4 * (0.8 + 0.4 * oscA);
+            // Lateral sweep — each dot moves its own way, kills the bar.
+            dDx += dxU[i] * dotBlink * 3.5;
+            dDy += dyU[i] * dotBlink * 1.6;
+          }
 
           // ── Head as a unit: roll around centroid, then translate ──
-          // Rotation around face center comes FIRST so per-feature offsets
-          // are applied to the already-rotated head — the whole head moves
-          // together, then the mouth/brow/etc. animate within it.
           const dx0 = xs[i] - cxImg;
           const dy0 = ys[i] - cyImg;
           const rx  = dx0 * cosR - dy0 * sinR;
           const ry  = dx0 * sinR + dy0 * cosR;
 
-          const imgX = cxImg + rx + idleDx + liveX + headSway + mouthWidthDx + noseDx + eyeDx;
-          const imgY = cyImg + ry + idleDy + liveY + headBob + jawOpen + upperLip
-                      + browLift + foreheadDy + cheekLift + eyeDy;
+          const imgX = cxImg + rx + dDx + headSway;
+          const imgY = cyImg + ry + dDy + headBob;
           pxArr[i] = cX + (imgX - cxImg) * sX;
           pyArr[i] = cY + (imgY - cyImg) * sY;
         }
