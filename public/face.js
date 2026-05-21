@@ -298,11 +298,15 @@
       // ~85ms rise, ~250ms fall — talking-activity signal, not per-phoneme.
       smoothedVoice = smoothedVoice * 0.88 + voice * 0.12;
       const tSec = now * 0.001;
-      // Whole-head bob — uniform Y translation + a touch of sway. Reads as
-      // Zion nodding into his words; the whole head moves as one unit,
-      // not a particle wave.
-      const headBob  = smoothedVoice * 12.0;
-      const headSway = smoothedVoice * 4.0 * Math.sin(tSec * 1.6);
+      // Whole-head bob + sway — small uniform translation. Reads as
+      // micro-nod into the words, not a bounce.
+      const headBob  = smoothedVoice * 4.5;
+      const headSway = smoothedVoice * 1.6 * Math.sin(tSec * 0.9);
+
+      // Autonomic blink — happens every ~4.5s regardless of voice. A
+      // short 0.18s squeeze that gives the face life even when quiet.
+      const blinkCycle = (tSec * (1 / 4.5)) % 1;
+      const blinkAmt = blinkCycle < 0.04 ? Math.sin(blinkCycle / 0.04 * Math.PI) : 0;
 
       const orbOmega = 2 * Math.PI * 0.4;
       const orbPhase = tSec * orbOmega;
@@ -325,12 +329,15 @@
       if (phaseKind === 'live') {
         const imgHinv = 1 / imgH;
         const halfW = imgW * 0.5;
-        // Real, proportional mouth + jaw. Central-column Gaussian in x
-        // keeps motion on the mouth/jaw and tapers to nothing at the
-        // cheeks; sin-eased vertical profile = smooth open, no banding.
-        const UPPER_LIP_N = 0.70;
-        const CHIN_N      = 0.99;
-        const LIP_Y       = 0.74;
+        // Face-region landmarks in image-normalized y. Tuned for the
+        // lylo face-source.jpg portrait — eyes mid-upper-face, mouth
+        // about 3/4 down, chin near 0.9.
+        const BROW_TOP   = 0.32, BROW_BOT  = 0.41;
+        const EYE_TOP    = 0.38, EYE_BOT   = 0.46, EYE_CY = 0.42;
+        const CHEEK_TOP  = 0.50, CHEEK_BOT = 0.66;
+        const UPPER_LIP_N = 0.72;
+        const LIP_Y       = 0.76;
+        const CHIN_N      = 0.92;
         const SPAN        = CHIN_N - UPPER_LIP_N;
         for (let i = 0; i < n; i++) {
           const idleDx = idleAmp * Math.sin(orbPhase + phA[i]);
@@ -338,32 +345,56 @@
 
           const yNorm = ys[i] * imgHinv;
           const xRel = (xs[i] - halfW) / halfW;
-          // Tighter central-column Gaussian — focuses mouth motion on the
-          // mouth column instead of bleeding into the cheeks.
-          const hw = Math.exp(-xRel * xRel * 4.5);
+          // Two Gaussians — tight for mouth motion (stays on the mouth
+          // column), wider for brow/cheek (spans most of the face).
+          const mouthHw = Math.exp(-xRel * xRel * 4.5);
+          const faceHw  = Math.exp(-xRel * xRel * 1.6);
 
+          // Jaw drop — small, smooth, sin-eased upper-lip-to-chin.
           let jawOpen = 0;
-          if (yNorm > UPPER_LIP_N) {
+          if (yNorm > UPPER_LIP_N && yNorm < CHIN_N + 0.04) {
             const tt = Math.min(1, (yNorm - UPPER_LIP_N) / SPAN);
-            jawOpen = voice * 24 * hw * Math.sin(tt * Math.PI * 0.5);
+            jawOpen = voice * 7 * mouthHw * Math.sin(tt * Math.PI * 0.5);
           }
 
-          // Upper-lip lift — widened band + stronger pull so the gap
-          // between the lips actually opens, not just shifts.
+          // Upper-lip lift — narrow band just above the lip line.
           const ulDist = yNorm - LIP_Y;
-          const ulKernel = Math.max(0, 1 - Math.abs(ulDist) / 0.06);
-          const upperLip = (yNorm < LIP_Y) ? -voice * 9 * hw * ulKernel : 0;
+          const ulKernel = Math.max(0, 1 - Math.abs(ulDist) / 0.05);
+          const upperLip = (yNorm < LIP_Y) ? -voice * 3 * mouthHw * ulKernel : 0;
 
-          // Whole-face dance — incoherent per-dot jitter (phase seeded by
-          // index, not position) so it sparkles instead of forming wave
-          // streaks. Amplitude scales hard with voice so the whole head
-          // visibly comes alive while Zion speaks, then settles when quiet.
-          const danceAmp = smoothedVoice * 8.0;
+          // Brow raise — eyebrows lift on speech, sin-eased so the
+          // motion peaks at the middle of the brow band and tapers at
+          // the edges. This is what makes the upper face *react*.
+          let browLift = 0;
+          if (yNorm > BROW_TOP && yNorm < BROW_BOT) {
+            const bk = Math.sin((yNorm - BROW_TOP) / (BROW_BOT - BROW_TOP) * Math.PI);
+            browLift = -smoothedVoice * 2.5 * faceHw * bk;
+          }
+
+          // Cheek lift — outer cheeks pull up slightly during speech,
+          // suggesting an engaged / slightly-smiling expression.
+          let cheekLift = 0;
+          if (yNorm > CHEEK_TOP && yNorm < CHEEK_BOT && Math.abs(xRel) > 0.30) {
+            const ck = Math.sin((yNorm - CHEEK_TOP) / (CHEEK_BOT - CHEEK_TOP) * Math.PI);
+            cheekLift = -smoothedVoice * 1.4 * ck;
+          }
+
+          // Blink — eye-band particles compress toward the eye center
+          // for ~0.18s every ~4.5s. Pure autonomic; runs even when quiet.
+          let blinkDy = 0;
+          if (blinkAmt > 0 && yNorm > EYE_TOP && yNorm < EYE_BOT) {
+            blinkDy = (EYE_CY - yNorm) * imgH * blinkAmt * 0.55;
+          }
+
+          // Whole-face shimmer — incoherent per-dot jitter (phase seeded
+          // by index) so it sparkles instead of forming wave streaks.
+          // Subtle so the head reads as alive without looking jittery.
+          const danceAmp = smoothedVoice * 2.4;
           const liveX = danceAmp * Math.sin(tSec * 9.3 + i * 0.71);
           const liveY = danceAmp * Math.cos(tSec * 11.1 + i * 0.91);
 
           const imgX = xs[i] + idleDx + liveX + headSway;
-          const imgY = ys[i] + idleDy + jawOpen + upperLip + headBob + liveY;
+          const imgY = ys[i] + idleDy + jawOpen + upperLip + browLift + cheekLift + blinkDy + headBob + liveY;
           pxArr[i] = cX + (imgX - cxImg) * sX;
           pyArr[i] = cY + (imgY - cyImg) * sY;
         }
