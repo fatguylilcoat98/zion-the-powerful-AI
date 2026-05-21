@@ -155,3 +155,25 @@ CREATE TABLE IF NOT EXISTS governance_audit_log (
 );
 CREATE INDEX IF NOT EXISTS governance_audit_log_ts_idx
   ON governance_audit_log (timestamp DESC);
+
+-- ============================================================================
+-- DOCUMENTS (Document upload and management)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS documents (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL,
+  title TEXT NOT NULL,
+  description TEXT,
+  category TEXT NOT NULL DEFAULT 'general',
+  filename TEXT NOT NULL,
+  original_name TEXT NOT NULL,
+  file_path TEXT NOT NULL,
+  mime_type TEXT NOT NULL,
+  file_size BIGINT NOT NULL,
+  extracted_text TEXT,
+  uploaded_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS documents_user_idx ON documents (user_id, uploaded_at DESC);
+CREATE INDEX IF NOT EXISTS documents_category_idx ON documents (category);
+CREATE INDEX IF NOT EXISTS documents_type_idx ON documents (mime_type);

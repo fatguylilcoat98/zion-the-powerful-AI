@@ -37,6 +37,7 @@ const emailRoutes      = require('./routes/email');
 const activityRoutes   = require('./routes/activity');
 const governanceRoutes = require('./routes/governance');
 const converseRoutes   = require('./routes/converse');
+const documentsRoutes  = require('./routes/documents');
 
 loadZionHtml();
 
@@ -83,6 +84,7 @@ app.use('/api/email',      emailRoutes);
 app.use('/api/activity',   activityRoutes);
 app.use('/api/governance', governanceRoutes);
 app.use('/api/converse',   converseRoutes);
+app.use('/api/documents',  documentsRoutes);
 
 app.get('/health', (req, res) => {
   const pkg = require('./package.json');

@@ -118,6 +118,65 @@
     }
     .panel-subtitle { font-size: 9px; color: #708090; letter-spacing: 0.6px; text-transform: uppercase; }
     .panel-body { padding: 12px; flex: 1; overflow-y: auto; }
+    .panel-body.hidden { display: none; }
+
+    .panel-nav {
+      display: flex; gap: 2px; margin-bottom: 8px;
+      background: rgba(0, 0, 0, 0.2); border-radius: 6px; padding: 2px;
+    }
+    .panel-tab {
+      flex: 1; padding: 6px 8px; font-size: 10px; font-weight: 600;
+      letter-spacing: 0.8px; text-transform: uppercase; cursor: pointer;
+      background: transparent; border: none; color: rgba(255, 255, 255, 0.6);
+      border-radius: 4px; transition: all 0.2s; font-family: inherit;
+    }
+    .panel-tab:hover { color: rgba(255, 255, 255, 0.85); }
+    .panel-tab.active {
+      background: linear-gradient(135deg, var(--teal-bright), var(--teal-primary));
+      color: #042026; font-weight: 700;
+      box-shadow: 0 0 12px rgba(0, 229, 255, 0.35);
+    }
+
+    .documents-upload-zone {
+      border: 2px dashed rgba(0, 191, 196, 0.3); border-radius: 8px;
+      padding: 20px; text-align: center; margin-bottom: 16px;
+      background: rgba(0, 191, 196, 0.05); cursor: pointer;
+      transition: all 0.2s; position: relative;
+    }
+    .documents-upload-zone:hover { border-color: var(--teal-bright); background: rgba(0, 191, 196, 0.1); }
+    .documents-upload-zone.dragover { border-color: var(--teal-bright); background: rgba(0, 191, 196, 0.15); }
+    .upload-icon { font-size: 24px; margin-bottom: 8px; opacity: 0.7; }
+    .upload-text { font-size: 11px; color: var(--text); margin-bottom: 4px; font-weight: 500; }
+    .upload-hint { font-size: 9px; color: var(--text-mute); }
+
+    .document-card {
+      background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 6px; padding: 8px; margin-bottom: 8px; font-size: 10px;
+      transition: background 0.2s; position: relative;
+    }
+    .document-card:hover { background: rgba(255, 255, 255, 0.05); }
+    .document-header {
+      display: flex; align-items: center; justify-content: space-between;
+      margin-bottom: 4px; font-weight: 600;
+    }
+    .document-name { color: var(--teal-bright); }
+    .document-size { color: var(--text-mute); font-size: 9px; }
+    .document-meta {
+      font-size: 9px; color: var(--text-mute); margin-bottom: 6px;
+      display: flex; justify-content: space-between;
+    }
+    .document-actions {
+      display: flex; gap: 6px; align-items: center;
+    }
+    .document-btn {
+      padding: 3px 6px; font-size: 8px; border: 1px solid rgba(255, 255, 255, 0.2);
+      background: transparent; color: var(--text); border-radius: 3px;
+      cursor: pointer; transition: all 0.2s; font-family: inherit;
+      text-transform: uppercase; font-weight: 500; letter-spacing: 0.5px;
+    }
+    .document-btn:hover { background: rgba(255, 255, 255, 0.1); }
+    .document-btn.delete { border-color: rgba(255, 92, 92, 0.5); color: #ff5c5c; }
+    .document-btn.delete:hover { background: rgba(255, 92, 92, 0.1); }
     .empty-state { color: #708090; font-size: 11px; font-style: italic; padding: 14px 8px; text-align: center; }
     .memory-card {
       background: linear-gradient(135deg, rgba(15, 22, 32, 0.9), rgba(25, 32, 42, 0.8));
@@ -391,11 +450,28 @@
 
     <aside class="provenance-panel">
       <div class="panel-header">
-        <div class="panel-title">Provenance Stream</div>
-        <div class="panel-subtitle">Memory Verification &amp; Source Tracking</div>
+        <div class="panel-nav">
+          <button class="panel-tab active" id="memoryTab">Memory</button>
+          <button class="panel-tab" id="documentsTab">Documents</button>
+        </div>
+        <div class="panel-title" id="panelTitle">Provenance Stream</div>
+        <div class="panel-subtitle" id="panelSubtitle">Memory Verification &amp; Source Tracking</div>
       </div>
       <div class="panel-body" id="memoryList">
         <div class="empty-state">Loading memories…</div>
+      </div>
+      <div class="panel-body hidden" id="documentsList">
+        <div class="documents-upload-zone" id="documentsUpload">
+          <input type="file" id="documentFileInput" accept=".pdf,.doc,.docx,.txt,.csv,.xls,.xlsx,.ppt,.pptx,.jpg,.jpeg,.png,.gif,.webp" multiple style="display: none;">
+          <div class="upload-content">
+            <div class="upload-icon">📄</div>
+            <div class="upload-text">Drop files here or click to upload</div>
+            <div class="upload-hint">PDF, DOC, TXT, images (max 50MB each)</div>
+          </div>
+        </div>
+        <div id="documentsContent">
+          <div class="empty-state">Loading documents…</div>
+        </div>
       </div>
     </aside>
 
@@ -529,6 +605,61 @@
     $('modeList').addEventListener('click', () => patchModes({ list_mode: !modes.list_mode }));
     $('modeGrammar').addEventListener('click', () => patchModes({ grammar: !modes.grammar }));
 
+    // ── Panel tab switching
+    $('memoryTab').addEventListener('click', () => switchPanel('memory'));
+    $('documentsTab').addEventListener('click', () => switchPanel('documents'));
+
+    function switchPanel(panel) {
+      const memoryTab = $('memoryTab');
+      const documentsTab = $('documentsTab');
+      const memoryList = $('memoryList');
+      const documentsList = $('documentsList');
+      const panelTitle = $('panelTitle');
+      const panelSubtitle = $('panelSubtitle');
+
+      if (panel === 'memory') {
+        memoryTab.classList.add('active');
+        documentsTab.classList.remove('active');
+        memoryList.classList.remove('hidden');
+        documentsList.classList.add('hidden');
+        panelTitle.textContent = 'Provenance Stream';
+        panelSubtitle.textContent = 'Memory Verification & Source Tracking';
+      } else {
+        memoryTab.classList.remove('active');
+        documentsTab.classList.add('active');
+        memoryList.classList.add('hidden');
+        documentsList.classList.remove('hidden');
+        panelTitle.textContent = 'Document Library';
+        panelSubtitle.textContent = 'Upload & Knowledge Management';
+        fetchDocuments();
+      }
+    }
+
+    // ── Document upload handlers
+    const uploadsZone = $('documentsUpload');
+    const fileInput = $('documentFileInput');
+
+    uploadsZone.addEventListener('click', () => fileInput.click());
+    uploadsZone.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      uploadsZone.classList.add('dragover');
+    });
+    uploadsZone.addEventListener('dragleave', () => {
+      uploadsZone.classList.remove('dragover');
+    });
+    uploadsZone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      uploadsZone.classList.remove('dragover');
+      const files = Array.from(e.dataTransfer.files);
+      files.forEach(uploadDocument);
+    });
+
+    fileInput.addEventListener('change', (e) => {
+      const files = Array.from(e.target.files);
+      files.forEach(uploadDocument);
+      fileInput.value = '';
+    });
+
     async function fetchMemories() {
       try {
         const { data: { session } } = await zionSupabase.auth.getSession();
@@ -553,6 +684,105 @@
           ${date ? `<div class="memory-meta">Recorded: ${escapeHtml(date)}</div>` : ''}
         </div>`;
       }).join('');
+    }
+
+    // ── Documents
+    let currentDocuments = [];
+
+    async function fetchDocuments() {
+      try {
+        const { data: { session } } = await zionSupabase.auth.getSession();
+        if (!session) {
+          renderDocuments([]);
+          return;
+        }
+        const res = await zionFetch('/api/documents');
+        if (!res.ok) { renderDocuments([]); return; }
+        const data = await res.json();
+        currentDocuments = Array.isArray(data.documents) ? data.documents : [];
+        renderDocuments(currentDocuments);
+      } catch (_) { renderDocuments([]); }
+    }
+
+    function renderDocuments(documents) {
+      const el = $('documentsContent');
+      if (!documents.length) {
+        el.innerHTML = '<div class="empty-state">No documents uploaded yet.</div>';
+        return;
+      }
+      el.innerHTML = documents.map(doc => {
+        const sizeKB = Math.round(doc.file_size / 1024);
+        const date = (doc.uploaded_at || '').slice(0, 10);
+        return `<div class="document-card" data-id="${doc.id}">
+          <div class="document-header">
+            <span class="document-name">${escapeHtml(doc.title || doc.original_name)}</span>
+            <span class="document-size">${sizeKB}KB</span>
+          </div>
+          <div class="document-meta">
+            <span>${escapeHtml(doc.mime_type)}</span>
+            <span>${date}</span>
+          </div>
+          <div class="document-actions">
+            <button class="document-btn" onclick="downloadDocument('${doc.id}')">Download</button>
+            <button class="document-btn delete" onclick="deleteDocument('${doc.id}')">Delete</button>
+          </div>
+        </div>`;
+      }).join('');
+    }
+
+    async function uploadDocument(file) {
+      try {
+        const formData = new FormData();
+        formData.append('document', file);
+        formData.append('title', file.name);
+        formData.append('category', 'general');
+
+        const res = await zionFetch('/api/documents/upload', {
+          method: 'POST',
+          body: formData
+        });
+
+        if (!res.ok) {
+          const error = await res.json();
+          throw new Error(error.message || 'Upload failed');
+        }
+
+        fetchDocuments();
+        return true;
+      } catch (err) {
+        alert(`Upload failed: ${err.message}`);
+        return false;
+      }
+    }
+
+    async function deleteDocument(docId) {
+      if (!confirm('Delete this document?')) return;
+      try {
+        const res = await zionFetch(`/api/documents/${docId}`, { method: 'DELETE' });
+        if (!res.ok) throw new Error('Delete failed');
+        fetchDocuments();
+      } catch (err) {
+        alert(`Delete failed: ${err.message}`);
+      }
+    }
+
+    async function downloadDocument(docId) {
+      try {
+        const res = await zionFetch(`/api/documents/${docId}/download`);
+        if (!res.ok) throw new Error('Download failed');
+        const blob = await res.blob();
+        const doc = currentDocuments.find(d => d.id === docId);
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = doc?.original_name || 'document';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      } catch (err) {
+        alert(`Download failed: ${err.message}`);
+      }
     }
 
     // Orb state machine + canvas
@@ -999,6 +1229,7 @@
         hideLoginOverlay();
         fetchModes();
         fetchMemories();
+        fetchDocuments();
         return true;
       } catch (_) { showLoginOverlay(); return false; }
     }
@@ -1031,9 +1262,10 @@
 
     checkAuthState();
 
-    // Initialize memory state immediately
+    // Initialize memory and documents state immediately
     setTimeout(() => {
       fetchMemories();
+      fetchDocuments();
     }, 200);
 
     if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
